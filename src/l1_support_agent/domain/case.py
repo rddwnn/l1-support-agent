@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from states import CaseState
+from .states import CaseState
 
 
 @dataclass

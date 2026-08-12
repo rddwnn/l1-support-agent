@@ -1,15 +1,20 @@
 from l1_support_agent.domain import Case
 from l1_support_agent.domain import CaseState
+from l1_support_agent.domain import Ticket
 
-from uuid import uuid4
 
 def test_case_creation():
-    case = Case(
-        id=uuid4(),
-        source_ticket_id='21',
-        state=CaseState.NEW
+    ticket = Ticket(
+        source="mockapi",
+        source_id="123",
+        user="test_user",
+        title="Test ticket",
+        description="Something is broken",
     )
-    assert case.source_ticket_id == '21'
+
+    case = Case.from_ticket(ticket)
+
+    assert case.ticket == ticket
     assert case.state == CaseState.NEW
     assert case.category is None
-    assert case.priority is None 
+    assert case.priority is None

@@ -14,6 +14,12 @@ _TRANSITIONS = {
 
 
 def transition(state: CaseState, event: Events) -> CaseState:
+    """Return the next case state for an event
+    
+    Raises:
+        InvalidTransition
+    """
+
     next_state = _TRANSITIONS.get((state, event))
     if next_state is None:
         raise InvalidTransitionError(

@@ -1,6 +1,4 @@
-from l1_support_agent.domain import Case
-from l1_support_agent.domain import CaseState
-from l1_support_agent.domain import Ticket
+from l1_support_agent.domain import Case, CaseState, Ticket
 
 
 def test_case_creation():

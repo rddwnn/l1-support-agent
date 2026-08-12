@@ -1,7 +1,6 @@
-from .states import CaseState
-from .events import Events
 from .errors import InvalidTransitionError
-
+from .events import Events
+from .states import CaseState
 
 _TRANSITIONS = {
     (CaseState.NEW, Events.PROCESSING_STARTED): CaseState.PROCESSING,

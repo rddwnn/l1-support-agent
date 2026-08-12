@@ -1,7 +1,11 @@
 import pytest
 
-from l1_support_agent.domain import CaseState, Events, InvalidTransitionError, transition
-
+from l1_support_agent.domain import (
+    CaseState,
+    Events,
+    InvalidTransitionError,
+    transition,
+)
 
 VALID_TRANSITIONS = {
     (CaseState.NEW, Events.PROCESSING_STARTED): CaseState.PROCESSING,

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from uuid import UUID, uuid5, NAMESPACE_URL
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from .states import CaseState
 from .ticket import Ticket

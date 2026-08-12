@@ -4,7 +4,6 @@ import httpx
 
 from l1_support_agent.domain import Ticket
 
-
 TICKETS_URL = "https://6a7ad74c8c69b3eb4a179621.mockapi.io/tickets/tickets"
 
 
@@ -50,7 +49,7 @@ class MockApiTicketClient:
         payload = response.json()
 
         if not isinstance(payload, dict):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 "MockAPI ticket response must be an object"
             )
 
@@ -63,7 +62,7 @@ class MockApiTicketClient:
         payload = response.json()
 
         if not isinstance(payload, list):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 "MockAPI tickets response must be a list"
             )
 
@@ -71,7 +70,7 @@ class MockApiTicketClient:
 
         for item in payload:
             if not isinstance(item, dict):
-                raise ValueError(
+                raise ValueError(  # noqa: TRY004
                     "MockAPI ticket must be an object"
                 )
 

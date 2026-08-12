@@ -5,9 +5,15 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
 
 # Virtual environments
 .venv
 
 # Docs
 docs/specs/*
+
+# Data 
+data/*.db
+data/*.db-shm
+data/*.db-wal

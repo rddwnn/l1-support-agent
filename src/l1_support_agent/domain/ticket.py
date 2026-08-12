@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -10,4 +10,5 @@ class Ticket:
     user: str
     title: str
     description: str
+    metadata: dict[str, object] = field(default_factory=dict)
     

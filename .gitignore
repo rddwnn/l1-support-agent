@@ -21,3 +21,4 @@ data/*.db-wal
 
 # scripts
 scripts/*
+support.db

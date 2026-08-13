@@ -39,6 +39,16 @@ ESCALATE_L2 = ToolDefinition(
     description="Escalate an infrastructure issue to L2.",
     input_schema={"type": "object"},
 )
+GET_TICKET = ToolDefinition(
+    name="get_ticket",
+    description="Fetch a source ticket.",
+    input_schema={"type": "object"},
+)
+LIST_TICKETS = ToolDefinition(
+    name="list_tickets",
+    description="List source tickets.",
+    input_schema={"type": "object"},
+)
 
 
 @pytest.fixture
@@ -144,7 +154,9 @@ def test_runtime_filters_tools_executes_search_and_feeds_result_to_llm(
     processing_case: Case,
 ) -> None:
     llm = kb_then_answer_llm()
-    mcp_client = FakeMCPClient([SEARCH_KB, CREATE_ISSUE])
+    mcp_client = FakeMCPClient(
+        [GET_TICKET, LIST_TICKETS, SEARCH_KB, CREATE_ISSUE]
+    )
 
     answer = asyncio.run(
         run_resolution_agent(processing_case, llm, mcp_client)

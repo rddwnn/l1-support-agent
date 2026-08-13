@@ -125,7 +125,6 @@ classDiagram
     TicketRepository --> Ticket
     CaseRepository --> Case
     CaseRepository --> Ticket
-    LLMClient ..> Case : triage and decisions
 ```
 
 [`process_ticket_by_id`](../src/l1_support_agent/application/process_ticket.py) accepts the `TicketClient` protocol. Runtime composition supplies `MCPTicketClient`; application tests can continue to supply small fakes.

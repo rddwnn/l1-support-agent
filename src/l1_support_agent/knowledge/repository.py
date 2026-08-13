@@ -68,6 +68,30 @@ class KnowledgeRepository:
 
         self._connection.commit()
 
+    def get(self, article_id: str) -> KnowledgeArticle | None:
+        row = self._connection.execute(
+            """
+            SELECT
+                id,
+                title,
+                content,
+                category
+            FROM knowledge_articles
+            WHERE id = ?
+            """,
+            (article_id,),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return KnowledgeArticle(
+            id=row["id"],
+            title=row["title"],
+            content=row["content"],
+            category=row["category"],
+        )
+
     def search(
         self,
         query: str,

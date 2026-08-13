@@ -351,6 +351,7 @@ def test_l2_escalation_executes_tool_then_transitions_case(
 
     assert outcome.message == summary
     assert processing_case.state is CaseState.ESCALATED_L2
+    assert "use no_solution only" in llm.calls[1][0][0].content.lower()
     assert mcp_client.calls == [
         ("search_kb", {"query": "network down"}),
         (

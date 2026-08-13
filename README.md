@@ -100,7 +100,7 @@ ollama pull qwen3.5:4b
 uv run python -m l1_support_agent.demo_kb
 ```
 
-The application reads exported environment variables; it does not parse `.env` itself.
+Run the demo KB seed before Scenario A. It adds a synthetic bilingual POST/beep article for lexical FTS5 candidate retrieval. The application reads exported environment variables; it does not parse `.env` itself.
 
 | Variable | Default / requirement |
 |---|---|

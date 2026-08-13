@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from uuid import UUID
 
+from l1_support_agent.agent.runtime import AgentRuntimeError
 from l1_support_agent.application.learn_from_resolution import (
     KnowledgeLearningError,
     KnowledgeLearningResult,
@@ -105,3 +106,26 @@ def test_application_error_returns_nonzero_without_traceback(capsys: object) -> 
     output = capsys.readouterr()  # type: ignore[attr-defined]
     assert "case is not eligible" in output.err
     assert "Traceback" not in output.err
+
+
+def test_process_no_solution_error_is_concise_without_exception_group(
+    capsys: object,
+) -> None:
+    async def process(
+        ticket_id: str,
+        config: RuntimeConfig,
+    ) -> TicketProcessingResult:
+        raise AgentRuntimeError("Knowledge base contains no adequate solution")
+
+    exit_code = run_cli(
+        ["process", "1"],
+        process_service=process,
+        config=CONFIG,
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr()  # type: ignore[attr-defined]
+    assert output.out == ""
+    assert output.err == "error: Knowledge base contains no adequate solution\n"
+    assert "Traceback" not in output.err
+    assert "ExceptionGroup" not in output.err

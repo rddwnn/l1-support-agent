@@ -7,11 +7,17 @@ from l1_support_agent.persistence.database import connect_database, init_databas
 
 DEMO_ARTICLE = KnowledgeArticle(
     id="demo-hardware-post-beep",
-    title="Компьютер пищит при включении и не загружается",
+    title=(
+        "Computer beeps during startup and does not boot / "
+        "Компьютер пищит и не загружается"
+    ),
     content=(
-        "Отключите питание компьютера. Переустановите модули оперативной памяти, "
-        "подключите питание и повторите запуск. Если компьютер продолжает пищать "
-        "и не загружается, запишите код POST-сигнала и передайте его специалисту."
+        "Power off the computer. Reseat the RAM modules, reconnect power, and "
+        "retry startup. If the computer still emits POST beeps and does not boot, "
+        "record the POST beep code and escalate for hardware diagnosis. "
+        "Отключите питание компьютера, переустановите модули оперативной памяти "
+        "и повторите запуск. Если компьютер продолжает пищать и не загружается, "
+        "запишите код POST-сигнала и передайте его на аппаратную диагностику."
     ),
     category="hardware",
 )

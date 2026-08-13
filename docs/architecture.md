@@ -1,198 +1,204 @@
 # Architecture
 
-## System boundary
-
-The project is a bounded single-agent application. Ollama selects actions and structured outcomes. Python owns authorization, validation, persistence, and state transitions.
-
-```mermaid
-flowchart TB
-    subgraph Inputs
-        CLI
-        API[FastAPI]
-    end
-    subgraph Composition
-        Wiring[interfaces.py]
-    end
-    subgraph Core
-        E2E[process_ticket_by_id]
-        Triage[triage_case]
-        Process[process_case]
-        Runtime[run_support_agent]
-        Policy[tool_policy]
-        Learn[learn_from_verified_resolution]
-        State[domain transition table]
-    end
-    subgraph Adapters
-        MockAPI
-        Ollama
-        MCP[MCP stdio client/server]
-        Telegram
-        GitHub
-    end
-    SQLite[(SQLite: tickets, cases, KB, FTS5)]
-
-    CLI --> Wiring
-    API --> Wiring
-    Wiring --> E2E
-    Wiring --> Learn
-    E2E --> MockAPI
-    E2E --> Triage
-    E2E --> Process
-    Triage --> Ollama
-    Process --> Runtime
-    Process --> State
-    Runtime --> Policy
-    Runtime --> Ollama
-    Runtime --> MCP
-    MCP --> SQLite
-    MCP --> Telegram
-    MCP --> GitHub
-    E2E --> SQLite
-    Learn --> SQLite
-    Learn --> Ollama
-```
-
-## Repository/module map
-
-| Module | Responsibility | Key code |
-|---|---|---|
-| `domain/` | Case identity, states, events, legal transitions | `Case`, `CaseState`, `Events`, `transition` |
-| `application/` | Orchestrate use cases; map successful outcomes to events | `process_ticket_by_id`, `triage_case`, `process_case`, `learn_from_verified_resolution`, `tool_policy` |
-| `agent/` | Triage parsing, bounded tool loop, post-KB decision validation, skill loader | `triage_ticket`, `run_support_agent`, `load_skill` |
-| `llm/` | Provider-neutral protocol and Ollama adapter | `LLMClient`, `ToolDefinition`, `OllamaClient` |
-| `mcp/` | Generic stdio client adapter and capability server | `SessionMCPClient`, `connect_stdio_mcp`, `search_kb`, `escalate_l2`, `create_github_issue` |
-| `integrations/` | External HTTP adapters | `MockApiTicketClient`, `TelegramClient`, `GitHubClient` |
-| `knowledge/` | Knowledge model and SQLite FTS5 search/write | `KnowledgeArticle`, `KnowledgeRepository` |
-| `persistence/` | Schema, connections, ticket/case repositories | `init_database`, `TicketRepository`, `CaseRepository` |
-| interface modules | Shared composition, CLI, REST | `interfaces.py`, `cli.py`, `api.py` |
-| `skills/` | Packaged Markdown instructions used in prompts | `src/l1_support_agent/skills/*/SKILL.md` |
-
-## Processing components
+## Capability plane and harness boundary
 
 ```mermaid
 flowchart LR
-    ID[ticket id] --> PT[process_ticket_by_id]
-    PT --> Fetch[MockApiTicketClient.get_ticket]
-    PT --> TR[TicketRepository]
-    PT --> CR[CaseRepository]
-    PT --> TC[triage_case if NEW]
-    TC --> TT[triage_ticket]
-    TT --> LLM[LLMClient]
-    PT --> PC[process_case]
-    PC --> RS[run_support_agent]
-    RS --> LP[load_skill]
-    RS --> TP[allowed_tool_names / ensure_tool_allowed]
-    RS --> LLM
-    RS --> MC[MCPClient]
-    MC --> MS[MCP server]
-    MS --> KR[KnowledgeRepository]
-    MS --> TG[TelegramClient]
-    MS --> GH[GitHubClient]
-    PC --> ST[transition]
-    PT --> CR
+    subgraph Consumers
+        BuiltIn[Built-in bounded harness<br/>CLI + REST]
+        External[External MCP-compatible harness]
+    end
+
+    subgraph BuiltInOnly[Built-in harness responsibilities]
+        Lifecycle[Case lifecycle + persistence]
+        Policy[Case-aware tool policy]
+        Runtime[Bounded LLM runtime + validation]
+        Skills[Operational skills]
+        Learning[Verified self-learning]
+    end
+
+    MCP[Reusable company capability plane<br/>stdio MCP server]
+    MockAPI[MockAPI]
+    SQLite[(SQLite<br/>tickets / cases / KB / FTS5)]
+    Telegram[Telegram]
+    GitHub[GitHub]
+    Ollama[Ollama]
+
+    BuiltIn --> Lifecycle
+    BuiltIn --> Runtime
+    Runtime --> Policy
+    Runtime --> Skills
+    BuiltIn --> Learning
+    Runtime --> Ollama
+    Learning --> Ollama
+    Lifecycle --> SQLite
+    Learning --> SQLite
+    BuiltIn -->|generic MCP client| MCP
+    External -->|any stdio MCP client| MCP
+    MCP -->|get/list tickets| MockAPI
+    MCP -->|search KB| SQLite
+    MCP -->|L2 escalation| Telegram
+    MCP -->|development issue| GitHub
 ```
 
-`process_ticket_by_id` creates the deterministic Case ID from `source:source_id`, persists intermediate triage state, and short-circuits persisted terminal cases. It does not duplicate triage or support-agent rules.
+The MCP server exposes capabilities and schemas. It has no Case, lifecycle, LLM, or built-in policy dependency. An external harness supplies its own authorization unless it deliberately reuses application-layer code.
 
-## Scenario A — known KB resolution
+## Repository tree
+
+```text
+src/l1_support_agent/
+├── agent/                  bounded runtime, triage parser, skill loader
+├── application/            ticket processing, Case processing, policy, learning
+├── domain/                 Ticket, Case, states, events, transitions
+├── integrations/
+│   ├── tickets/mockapi.py  external source adapter
+│   ├── tickets/mcp.py      MCP payload -> domain Ticket adapter
+│   ├── telegram.py         L2 HTTP adapter
+│   └── github.py           issue HTTP adapter
+├── knowledge/              KnowledgeArticle and SQLite FTS repository
+├── llm/                    provider-neutral protocol and Ollama adapter
+├── mcp/
+│   ├── client.py           generic MCP transport adapter
+│   └── server.py           reusable company capabilities
+├── persistence/            schema and Ticket/Case repositories
+├── skills/                 packaged operational SKILL.md files
+├── api.py                  FastAPI transport
+├── cli.py                  argparse transport
+├── interfaces.py           runtime composition and resource ownership
+└── demo_kb.py              idempotent synthetic KB seed
+```
+
+## Important code contracts
+
+```mermaid
+classDiagram
+    class Ticket {
+        +str source
+        +str source_id
+        +str user
+        +str title
+        +str description
+        +dict metadata
+    }
+    class Case {
+        +UUID id
+        +Ticket ticket
+        +CaseState state
+        +str category
+        +str priority
+        +from_ticket(Ticket) Case
+    }
+    class TicketClient {
+        <<Protocol>>
+        +get_ticket(str) Ticket
+    }
+    class MCPTicketClient {
+        +get_ticket(str) Ticket
+        +list_tickets() list~Ticket~
+    }
+    class MCPClient {
+        <<Protocol>>
+        +list_tools() list~ToolDefinition~
+        +call_tool(str, dict) object
+    }
+    class LLMClient {
+        <<Protocol>>
+        +chat(messages, schema, tools) LLMResponse
+    }
+    class TicketRepository {
+        +save(Ticket)
+        +get(str, str) Ticket
+    }
+    class CaseRepository {
+        +save(Case)
+        +get(UUID) Case
+    }
+    class KnowledgeRepository {
+        +add(KnowledgeArticle)
+        +get(str) KnowledgeArticle
+        +search(str, int) list~KnowledgeArticle~
+    }
+
+    Case *-- Ticket
+    TicketClient <|.. MCPTicketClient
+    MCPTicketClient --> MCPClient
+    TicketRepository --> Ticket
+    CaseRepository --> Case
+    CaseRepository --> Ticket
+    LLMClient ..> Case : triage and decisions
+```
+
+[`process_ticket_by_id`](../src/l1_support_agent/application/process_ticket.py) accepts the `TicketClient` protocol. Runtime composition supplies `MCPTicketClient`; application tests can continue to supply small fakes.
+
+## Combined ticket-processing sequence
 
 ```mermaid
 sequenceDiagram
+    actor Caller
     participant App as process_ticket_by_id
-    participant Triage as triage_case
-    participant Agent as run_support_agent
-    participant Policy as tool_policy
-    participant MCP as search_kb
-    participant KB as SQLite FTS5
-    participant LLM as Ollama
-    participant State as transition
-
-    App->>Triage: NEW Case
-    Triage->>LLM: ticket + triage skill + schema
-    LLM-->>Triage: category, priority, reasoning
-    Triage-->>App: PROCESSING Case
-    App->>Agent: process
-    Agent->>Policy: allowed names, kb_searched=false
-    Policy-->>Agent: search_kb only
-    Agent->>LLM: visible search_kb definition
-    LLM-->>Agent: search_kb(query)
-    Agent->>Policy: authorize immediately before execution
-    Agent->>MCP: search_kb(query)
-    MCP->>KB: FTS5 search
-    KB-->>Agent: candidate articles
-    Agent->>LLM: ticket + candidates + structured schema; tools=[]
-    LLM-->>Agent: resolve + article_id + grounded answer
-    Agent->>Agent: validate returned ID and non-empty answer
-    Agent-->>App: RESOLVED outcome
-    App->>State: CASE_RESOLVED
-    State-->>App: RESOLVED
-```
-
-Retrieval is not proof of relevance. Resolution requires the model to select an ID actually returned by `search_kb`; [`agent/runtime.py`](../src/l1_support_agent/agent/runtime.py) enforces this.
-
-## Scenario B — L2 escalation
-
-```mermaid
-sequenceDiagram
-    participant Agent as run_support_agent
-    participant KB as search_kb
-    participant LLM as Ollama
-    participant Policy as tool_policy
+    participant TicketMCP as MCPTicketClient
     participant MCP as MCP server
-    participant TG as Telegram API
-    participant App as process_case
-    participant State as transition
+    participant Source as MockApiTicketClient / MockAPI
+    participant DB as TicketRepository / CaseRepository
+    participant LLM as LLMClient
+    participant Runtime as run_support_agent
+    participant Policy as built-in tool_policy
+    participant External as Telegram / GitHub
 
-    Agent->>KB: mandatory search
-    KB-->>Agent: no adequate candidate
-    Agent->>LLM: ticket + candidates + L2 skill; tools=[]
-    LLM-->>Agent: escalate_l2 + factual summary
-    Agent->>Agent: validate non-empty summary
-    Agent->>Policy: ensure escalate_l2 allowed
-    Agent->>MCP: escalate_l2(summary, ticket reference)
-    MCP->>TG: sendMessage
-    TG-->>MCP: message_id
-    MCP-->>Agent: {message_id: integer}
-    Agent->>Agent: validate MCP result
-    Agent-->>App: ESCALATED_L2 outcome
-    App->>State: L2_ESCALATED
-    State-->>App: ESCALATED_L2
+    Caller->>App: ticket_id
+    App->>TicketMCP: get_ticket(ticket_id)
+    TicketMCP->>MCP: call_tool(get_ticket)
+    MCP->>Source: read source ticket
+    Source-->>MCP: domain Ticket
+    MCP-->>TicketMCP: {ticket: structured payload}
+    TicketMCP-->>App: validated domain Ticket
+    App->>DB: persist Ticket; load/create deterministic Case
+    opt Case is NEW
+        App->>LLM: triage skill + output schema
+        LLM-->>App: validated category + priority
+        App->>DB: persist PROCESSING
+    end
+    App->>Runtime: process Case
+    Runtime->>MCP: list_tools
+    MCP-->>Runtime: five capability definitions
+    Runtime->>Policy: allowed names before KB
+    Policy-->>Runtime: search_kb only
+    Runtime->>LLM: ticket + visible search_kb
+    LLM-->>Runtime: search_kb(query)
+    Runtime->>Policy: ensure_tool_allowed(search_kb)
+    Runtime->>MCP: search_kb(query)
+    MCP-->>Runtime: {articles: candidates}
+    Runtime->>LLM: candidates + post-KB schema; tools=[]
+    alt A — adequate article
+        LLM-->>Runtime: resolve + returned article_id + answer
+        Runtime->>Runtime: validate ID and grounded answer
+        Runtime-->>App: RESOLVED outcome
+        App->>DB: apply CASE_RESOLVED; persist
+    else B — infrastructure/support
+        LLM-->>Runtime: escalate_l2 + factual summary
+        Runtime->>Policy: ensure_tool_allowed(escalate_l2)
+        Runtime->>MCP: escalate_l2(summary, ticket reference)
+        MCP->>External: Telegram sendMessage
+        External-->>MCP: message_id
+        MCP-->>Runtime: {message_id: integer}
+        Runtime-->>App: ESCALATED_L2 outcome
+        App->>DB: apply L2_ESCALATED; persist
+    else C — software defect
+        LLM-->>Runtime: create_github_issue + title + context
+        Runtime->>Policy: ensure_tool_allowed(create_github_issue)
+        Runtime->>MCP: trusted ticket fields + decision fields
+        MCP->>External: GitHub issue POST
+        External-->>MCP: html_url
+        MCP-->>Runtime: {issue_url: non-empty string}
+        Runtime-->>App: ESCALATED_DEVELOPMENT outcome
+        App->>DB: apply DEVELOPMENT_ESCALATED; persist
+    end
+    App-->>Caller: TicketProcessingResult
 ```
 
-No transition occurs if Telegram fails or `message_id` is malformed.
+`get_ticket` and `list_tickets` are ingestion capabilities. The built-in LLM never sees them because the Case-aware policy intersects discovered MCP tools with its allowed-name set.
 
-## Scenario C — development escalation
-
-```mermaid
-sequenceDiagram
-    participant Agent as run_support_agent
-    participant KB as search_kb
-    participant LLM as Ollama
-    participant Policy as tool_policy
-    participant MCP as MCP server
-    participant GH as GitHub API
-    participant App as process_case
-    participant State as transition
-
-    Agent->>KB: mandatory search
-    KB-->>Agent: no adequate candidate
-    Agent->>LLM: ticket + candidates + development skill; tools=[]
-    LLM-->>Agent: create_github_issue + title + technical context
-    Agent->>Agent: validate title and context
-    Agent->>Policy: ensure create_github_issue allowed
-    Agent->>MCP: title, context, ticket description, actual logs, reference
-    MCP->>GH: POST repository issue
-    GH-->>MCP: html_url
-    MCP-->>Agent: {issue_url: string}
-    Agent->>Agent: validate non-empty issue_url
-    Agent-->>App: ESCALATED_DEVELOPMENT outcome
-    App->>State: DEVELOPMENT_ESCALATED
-    State-->>App: ESCALATED_DEVELOPMENT
-```
-
-Only metadata keys `errors`, `error`, `logs`, and `stack_trace` are forwarded. If absent, the issue says `Not provided`.
-
-## State machine
+## Case state machine
 
 ```mermaid
 stateDiagram-v2
@@ -205,72 +211,108 @@ stateDiagram-v2
     PROCESSING --> ESCALATED_DEVELOPMENT: DEVELOPMENT_ESCALATED
 ```
 
-The table in [`domain/transitions.py`](../src/l1_support_agent/domain/transitions.py) contains lifecycle rules only. Tool permissions never enter this table.
+Only [`domain/transitions.py`](../src/l1_support_agent/domain/transitions.py) defines legal lifecycle transitions. MCP does not expose state mutation.
 
-## Tool authorization
-
-```mermaid
-flowchart TD
-    Case{Case state?}
-    Case -->|not PROCESSING| None[Allowed names = empty]
-    Case -->|PROCESSING| SearchDone{AgentContext.kb_searched?}
-    SearchDone -->|false| SearchOnly[Allowed names = search_kb]
-    SearchDone -->|true| Next[Allowed names = request_clarification, escalate_l2, create_github_issue]
-
-    Skills[Markdown skills] -.instructions only.-> Prompt[LLM prompt]
-    SearchOnly --> Intersect[Intersect policy names with discovered MCP tools]
-    Intersect --> Visible[Tools visible to LLM]
-    Visible --> Requested[LLM tool request]
-    Requested --> Recheck[ensure_tool_allowed]
-    Recheck --> Execute[MCP execution]
-
-    Next --> Structured[Current runtime uses structured post-KB decision with tools=[]]
-    Structured --> Validate[Python validates decision]
-    Validate --> Recheck2[ensure_tool_allowed before escalation execution]
-    Recheck2 --> Execute
-```
-
-`request_clarification` is present in the policy's next-stage names but has no MCP implementation. Skills never expand the allowed set.
-
-## Self-learning
+## SQLite data model
 
 ```mermaid
-flowchart TD
-    Input[case id + caller-supplied verified resolution] --> Exists{Case exists?}
-    Exists -->|no| Reject[KnowledgeLearningError]
-    Exists -->|yes| Eligible{ESCALATED_L2 or ESCALATED_DEVELOPMENT?}
-    Eligible -->|no| Reject
-    Eligible -->|yes| NonEmpty{Resolution non-empty?}
-    NonEmpty -->|no| Reject
-    NonEmpty -->|yes| StableID[article id = learned-case-CASE_UUID]
-    StableID --> Already{Article with stable id exists?}
-    Already -->|yes| Existing[ALREADY_EXISTS; no LLM call]
-    Already -->|no| Search[FTS5 duplicate candidate search]
-    Search --> Decide[LLM structured create / skip_existing]
-    Decide -->|skip_existing| Candidate{Selected ID was retrieved?}
-    Candidate -->|no| Reject
-    Candidate -->|yes| Covered[COVERED_BY_EXISTING; no write]
-    Decide -->|create| Title{Non-empty title?}
-    Title -->|no| Reject
-    Title -->|yes| Build[Deterministically build article from ticket + verified input]
-    Build --> Persist[KnowledgeRepository.add updates table + FTS]
-    Persist --> Created[CREATED]
+erDiagram
+    TICKETS ||--o{ CASES : "referenced by FK"
+
+    TICKETS {
+        text source PK
+        text source_id PK
+        text user
+        text title
+        text description
+        text metadata
+        text raw_payload
+    }
+    CASES {
+        text id PK
+        text ticket_source FK
+        text ticket_source_id FK
+        text state
+        text category
+        text priority
+    }
+    KNOWLEDGE_ARTICLES {
+        text id PK
+        text title
+        text content
+        text category
+    }
+    KNOWLEDGE_ARTICLES_FTS {
+        text article_id
+        text title
+        text content
+    }
 ```
 
-The learning LLM only judges duplicate coverage and proposes a title. It cannot supply resolution content, mutate the Case, or call a KB-write tool.
+`knowledge_articles_fts` mirrors searchable article fields, but SQLite does not enforce a foreign key between it and `knowledge_articles`. `KnowledgeRepository.add()` maintains both tables.
 
-## Persistence and failure boundaries
+## MCP capability matrix
+
+| Capability | MCP tool | Access | External side effect | Built-in usage | Built-in model sees directly? | Built-in policy gate |
+|---|---|---|---:|---|---:|---|
+| Ticket discovery | `list_tickets` | read | no | optional inspection | no | not part of agent loop |
+| Ticket ingestion | `get_ticket` | read | no | `MCPTicketClient` before Case processing | no | composition boundary |
+| KB investigation | `search_kb` | read | no | mandatory first agent action | yes | PROCESSING + `kb_searched=False` |
+| L2 delivery | `escalate_l2` | write | Telegram message | validated post-KB outcome | no (`tools=[]`) | PROCESSING + `kb_searched=True` |
+| Development delivery | `create_github_issue` | write | GitHub issue | validated post-KB outcome | no (`tools=[]`) | PROCESSING + `kb_searched=True` |
+
+For an external harness, all five tools are discoverable. Its own policy decides which definitions reach its model and which calls may execute.
+
+## Validation and failure boundaries
+
+| Boundary | Deterministic validation | Failure behavior | Case transition? |
+|---|---|---|---:|
+| MockAPI → MCP | existing MockAPI response-shape checks | HTTP/type error | no |
+| MCP → `MCPTicketClient` | wrapper, required string fields, metadata object | `MCPTicketPayloadError` | no |
+| Triage LLM → application | exact category/priority vocabularies and string reasoning | error; triage result not persisted | no terminal transition |
+| Agent tool request → MCP | `ensure_tool_allowed()` immediately before execution | `ToolNotAllowedError` | no |
+| `search_kb` → runtime | object wrapper, article list, non-empty article IDs | `AgentRuntimeError` | no |
+| Resolve decision → runtime | returned article ID and non-empty answer | `AgentRuntimeError` | no |
+| Telegram → runtime | result object with integer, non-boolean `message_id` | `AgentRuntimeError` | no |
+| GitHub → runtime | result object with non-empty `issue_url` | `AgentRuntimeError` | no |
+| Outcome → domain | legal state/event pair | `InvalidTransitionError` | no |
+
+MCP tool discovery is not authorization. Skills are prompt instructions, not authorization. Only the built-in harness applies `allowed_tool_names()` and `ensure_tool_allowed()`.
+
+## Self-learning sequence
 
 ```mermaid
-flowchart LR
-    Ticket[Ticket] --> T[(tickets)]
-    Case[Case] --> C[(cases)]
-    Article[KnowledgeArticle] --> K[(knowledge_articles)]
-    Article --> F[(knowledge_articles_fts)]
-    External[Telegram / GitHub success] --> Outcome[Validated AgentOutcome]
-    Outcome --> Transition[domain transition]
-    Transition --> C
-    External -.failure or malformed result.-> NoTransition[Case remains PROCESSING]
+sequenceDiagram
+    actor Caller as Human / verified external workflow
+    participant Learn as learn_from_verified_resolution
+    participant Cases as CaseRepository
+    participant KB as KnowledgeRepository
+    participant LLM as LLMClient
+    participant SQLite as KB table + FTS5
+
+    Caller->>Learn: case_id + verified_resolution
+    Learn->>Cases: get(case_id)
+    Cases-->>Learn: persisted Case
+    Learn->>Learn: require escalated state and non-empty input
+    Learn->>KB: get(learned-case-{case_id})
+    alt stable article already exists
+        KB-->>Learn: KnowledgeArticle
+        Learn-->>Caller: ALREADY_EXISTS; no LLM call
+    else first capture
+        Learn->>KB: search(ticket + verified resolution)
+        KB-->>Learn: duplicate candidates
+        Learn->>LLM: knowledge-update skill + create/skip schema; tools=[]
+        alt adequate candidate selected
+            LLM-->>Learn: skip_existing + retrieved ID
+            Learn->>Learn: validate ID was returned
+            Learn-->>Caller: COVERED_BY_EXISTING
+        else new knowledge
+            LLM-->>Learn: create + title only
+            Learn->>Learn: build content from ticket + caller input
+            Learn->>SQLite: KnowledgeRepository.add(article)
+            Learn-->>Caller: CREATED
+        end
+    end
 ```
 
-SQLite writes use explicit repositories. `KnowledgeRepository.add()` updates both the regular table and FTS5 index in one repository operation.
+Learning is a trusted application workflow, not a general MCP write tool. It does not mutate the source ticket or Case state.

@@ -1,18 +1,16 @@
 # Demo guide
 
-This runbook exercises the real local composition layer. Scenario B sends one real Telegram message; Scenario C creates one real GitHub issue.
-
 ## Prerequisites
 
 | Requirement | Check |
 |---|---|
 | Python 3.13+ and `uv` | `uv --version` |
-| Ollama installed | `ollama --version` |
-| MockAPI reachable | open the configured public ticket dataset |
-| Telegram credentials | required only for Scenario B |
-| GitHub token/repository | required only for Scenario C |
+| Ollama for the built-in harness | `ollama --version` |
+| Public MockAPI reachable | inspect the read-only dataset |
+| Telegram credentials | only for a real Scenario B side effect |
+| GitHub credentials | only for a real Scenario C side effect |
 
-## Prepare the environment
+## Prepare a disposable runtime
 
 ```bash
 uv sync
@@ -21,148 +19,108 @@ cp .env.example .env
 set -a
 source .env
 set +a
-```
-
-Use a disposable database when demonstrating:
-
-```bash
 export SUPPORT_DB_PATH=/tmp/l1-support-agent-demo.db
 ```
 
-The application does not parse `.env` itself; values must be exported into the process environment.
+The application reads exported environment variables; it does not parse `.env`.
 
-## Start Ollama
+Start Ollama in another terminal and ensure the configured model exists:
 
 ```bash
 ollama serve
-```
-
-In another terminal:
-
-```bash
 ollama pull "${LLM_MODEL:-qwen3.5:4b}"
 ```
 
-## Seed the synthetic demo KB
+## Seed the synthetic KB
 
 ```bash
 uv run python -m l1_support_agent.demo_kb
 ```
 
-This idempotently adds one synthetic article about a computer that beeps during POST and does not boot. It writes through `KnowledgeRepository`, so both the KB table and FTS5 index are updated.
+The idempotent seed writes one synthetic POST/beep hardware article through `KnowledgeRepository`, including its FTS5 row.
 
-## Demo map
+## Scenario matrix
 
-```mermaid
-flowchart LR
-    Seed[python -m l1_support_agent.demo_kb] --> A[process matching POST/beep ticket]
-    A -->|adequate article selected| AR[RESOLVED; grounded answer]
-    B[process office/network outage ticket] -->|no KB solution| BT[Telegram message]
-    BT --> BR[ESCALATED_L2]
-    C[process reproducible software defect] -->|no KB solution| CG[GitHub issue]
-    CG --> CR[ESCALATED_DEVELOPMENT]
-    BR --> L[learn CASE_ID --resolution ...]
-    CR --> L
-    L --> KB[CREATED / ALREADY_EXISTS / COVERED_BY_EXISTING]
-```
+| Scenario | Input | Expected MCP calls | Final state | Visible evidence |
+|---|---|---|---|---|
+| A — known KB issue | hardware POST/beep ticket | `get_ticket`, `search_kb` | `RESOLVED` | answer grounded in seeded article |
+| B — infrastructure | real outage with no adequate article | `get_ticket`, `search_kb`, `escalate_l2` | `ESCALATED_L2` | one Telegram message |
+| C — software defect | real defect with no adequate article | `get_ticket`, `search_kb`, `create_github_issue` | `ESCALATED_DEVELOPMENT` | one GitHub issue URL |
+| Learning | escalated Case + verified resolution | no MCP calls | Case unchanged | learning status + article ID |
 
-| Flow | Command | Expected visible evidence |
-|---|---|---|
-| A | `l1-support-agent process ID` | JSON state `resolved`; answer follows seeded article |
-| B | `l1-support-agent process ID` | one Telegram message; state `escalated_l2` |
-| C | `l1-support-agent process ID` | one GitHub issue URL; state `escalated` |
-| Learn | `l1-support-agent learn UUID --resolution ...` | learning status and article ID |
+## Inspect source tickets
 
-## Inspect source tickets first
-
-The public MockAPI dataset can change. Inspect it and use its actual fields; do not fabricate or edit remote tickets.
+The dataset can change. Read it through the capability plane or inspect the public read-only endpoint; never mutate it.
 
 ```bash
 curl -fsS https://6a7ad74c8c69b3eb4a179621.mockapi.io/tickets/tickets
 ```
 
-Choose:
+At the time of writing, local smoke work used ticket `1` for the POST/beep scenario. Verify its current fields. Skip any scenario without a defensible source ticket.
 
-- Scenario A: a hardware POST/beep ticket directly covered by the synthetic article. At the time of writing, ticket `1` is used by the local smoke workflow; verify before running.
-- Scenario B: a genuine network/infrastructure outage with no adequate seeded KB article.
-- Scenario C: a genuine software defect with no adequate seeded KB article.
-
-If no defensible ticket exists for a scenario, skip it rather than changing MockAPI data.
-
-## Run through the CLI
-
-### Scenario A — known KB issue
+## Scenario A — known solution
 
 ```bash
 uv run l1-support-agent process 1
 ```
 
-Check the compact JSON:
+Expected JSON:
 
-1. `final_state` is `resolved`.
-2. `category` and `priority` are populated.
-3. `outcome_message` uses only instructions in the selected article.
+- populated `category` and `priority`;
+- `final_state` equal to `resolved`;
+- `outcome_message` grounded in the seeded article.
 
-Run it again. The `case_id` and final state must match; `outcome_message` is `null` because the persisted terminal Case short-circuits the agent.
+Run the same command again. The deterministic Case ID and state must match, and the persisted terminal Case must bypass another agent run.
 
-### Scenario B — L2 escalation
+## Scenario B — L2 escalation
 
-Before running, confirm `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` point to the intended demo chat.
+This command can send a real Telegram message. Confirm the configured chat before running it.
 
 ```bash
 uv run l1-support-agent process INFRASTRUCTURE_TICKET_ID
 ```
 
-Check:
+Expected evidence:
 
-- one concise Telegram message contains the ticket reference;
-- JSON `final_state` is `escalated_l2` only after Telegram returns an integer `message_id`;
-- a repeated command creates no second message.
+- the message contains a concise factual summary and ticket reference;
+- the Case reaches `ESCALATED_L2` only after an integer `message_id` is returned;
+- rerunning the terminal Case sends no second message.
 
-### Scenario C — development escalation
+## Scenario C — development escalation
 
-Before running, confirm `GITHUB_REPOSITORY` points to the intended demo repository.
+This command can create a real GitHub issue. Confirm the configured repository first.
 
 ```bash
 uv run l1-support-agent process SOFTWARE_TICKET_ID
 ```
 
-Check:
+Expected evidence:
 
-- the issue includes title, factual context, source description, ticket reference, and only supplied errors/logs;
-- JSON `final_state` is `escalated` only after GitHub returns an issue URL;
-- a repeated command creates no second issue.
+- the issue contains factual context, source description, reference, and only available logs;
+- the Case reaches `ESCALATED_DEVELOPMENT` only after a non-empty issue URL is returned;
+- rerunning the terminal Case creates no second issue.
 
-### Self-learning
+## Explicit self-learning
 
-Use an escalated Case ID and a resolution verified outside L1:
+Use a resolution verified outside L1:
 
 ```bash
 uv run l1-support-agent learn CASE_UUID \
   --resolution "Verified factual resolution supplied by L2 or development"
 ```
 
-Expected statuses:
-
 | Status | Meaning |
 |---|---|
-| `created` | deterministic article written to KB and FTS5 |
-| `already_exists` | this Case was learned previously; no LLM call |
-| `covered_by_existing` | LLM selected an adequate retrieved candidate; no write |
+| `created` | stable learned article written to KB and FTS5 |
+| `already_exists` | this Case was learned before; no LLM call |
+| `covered_by_existing` | a retrieved article already covers the resolution; no write |
 
-`NEW`, `PROCESSING`, `AWAITING_USER`, and ordinary `RESOLVED` cases are rejected.
+Ordinary `RESOLVED` and non-terminal Cases are not eligible.
 
-## Run through REST
-
-Start the server:
+## REST transport
 
 ```bash
 uv run uvicorn l1_support_agent.api:app --host 127.0.0.1 --port 8000
-```
-
-Then:
-
-```bash
 curl -fsS http://127.0.0.1:8000/health
 curl -fsS -X POST http://127.0.0.1:8000/tickets/1/process
 curl -fsS -X POST http://127.0.0.1:8000/cases/CASE_UUID/learn \
@@ -170,16 +128,44 @@ curl -fsS -X POST http://127.0.0.1:8000/cases/CASE_UUID/learn \
   -d '{"verified_resolution":"Verified factual resolution"}'
 ```
 
-CLI and REST delegate to the same functions in `interfaces.py`; business behavior is identical.
+CLI and REST use the same composition functions in `interfaces.py`.
 
-## Safe reset
+## No-side-effect MCP interoperability smoke
 
-Only remove the disposable path you explicitly selected:
+This starts the real stdio server as a child, initializes a disposable DB, and only discovers tools. It does not call MockAPI, Telegram, or GitHub.
+
+```bash
+SUPPORT_DB_PATH=/tmp/l1-support-agent-mcp-smoke.db uv run python - <<'PY'
+import asyncio
+from l1_support_agent.interfaces import RuntimeConfig, build_mcp_server_parameters
+from l1_support_agent.mcp.client import connect_stdio_mcp
+
+async def main() -> None:
+    config = RuntimeConfig.from_env()
+    async with connect_stdio_mcp(build_mcp_server_parameters(config)) as client:
+        print([tool.name for tool in await client.list_tools()])
+
+asyncio.run(main())
+PY
+```
+
+Expected names:
+
+```text
+list_tickets, get_ticket, search_kb, escalate_l2, create_github_issue
+```
+
+After seeding the DB, a harness may also call `search_kb`; that operation is read-only. Do not call escalation tools during an interoperability smoke.
+
+## Safe local reset
+
+Only remove the exact disposable paths selected above:
 
 ```bash
 rm -f /tmp/l1-support-agent-demo.db \
       /tmp/l1-support-agent-demo.db-shm \
-      /tmp/l1-support-agent-demo.db-wal
+      /tmp/l1-support-agent-demo.db-wal \
+      /tmp/l1-support-agent-mcp-smoke.db
 ```
 
-This resets local SQLite state. It cannot undo Telegram messages or GitHub issues.
+Deleting SQLite files cannot undo Telegram messages or GitHub issues.

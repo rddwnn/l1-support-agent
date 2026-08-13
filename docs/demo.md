@@ -41,7 +41,7 @@ The idempotent seed writes one synthetic POST/beep hardware article through `Kno
 
 ## Scenario matrix
 
-| Scenario | Input | Expected MCP calls | Final state | Visible evidence |
+| Scenario | Input | Business capability calls | Final state | Visible evidence |
 |---|---|---|---|---|
 | A — known KB issue | hardware POST/beep ticket | `get_ticket`, `search_kb` | `RESOLVED` | answer grounded in seeded article |
 | B — infrastructure | real outage with no adequate article | `get_ticket`, `search_kb`, `escalate_l2` | `ESCALATED_L2` | one Telegram message |
@@ -143,16 +143,17 @@ from l1_support_agent.mcp.client import connect_stdio_mcp
 async def main() -> None:
     config = RuntimeConfig.from_env()
     async with connect_stdio_mcp(build_mcp_server_parameters(config)) as client:
-        print([tool.name for tool in await client.list_tools()])
+        names = sorted(tool.name for tool in await client.list_tools())
+        print(", ".join(names))
 
 asyncio.run(main())
 PY
 ```
 
-Expected names:
+The discovered set must contain exactly these names; ordering is not part of the MCP contract:
 
 ```text
-list_tickets, get_ticket, search_kb, escalate_l2, create_github_issue
+create_github_issue, escalate_l2, get_ticket, list_tickets, search_kb
 ```
 
 After seeding the DB, a harness may also call `search_kb`; that operation is read-only. Do not call escalation tools during an interoperability smoke.

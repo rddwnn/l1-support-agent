@@ -53,15 +53,18 @@ sequenceDiagram
     MCP-->>Harness: capability definitions
     Harness->>MCP: get_ticket(ticket_id)
     MCP->>Source: read ticket
-    Source-->>Harness: structured ticket via MCP
+    Source-->>MCP: source ticket
+    MCP-->>Harness: structured ticket
     Harness->>MCP: search_kb(query)
     MCP->>KB: FTS5 search
-    KB-->>Harness: candidate articles via MCP
+    KB-->>MCP: candidate articles
+    MCP-->>Harness: structured candidates
     Harness->>Harness: apply its own reasoning and authorization
     opt authorized L2 or development escalation
         Harness->>MCP: escalate_l2 or create_github_issue
         MCP->>SideEffect: perform requested capability
-        SideEffect-->>Harness: validated transport result via MCP
+        SideEffect-->>MCP: external result
+        MCP-->>Harness: structured tool result
     end
 ```
 

@@ -2,6 +2,7 @@ import json
 from dataclasses import dataclass
 from enum import StrEnum
 
+from l1_support_agent.agent.skills import load_skill
 from l1_support_agent.application.tool_policy import (
     AgentContext,
     allowed_tool_names,
@@ -12,21 +13,11 @@ from l1_support_agent.llm.client import LLMClient, LLMMessage, MessageRole
 from l1_support_agent.mcp.client import MCPClient
 
 SYSTEM_PROMPT = (
-    "You are an autonomous L1 support agent. "
-    "Use available tools to investigate the ticket. "
-    "Rely on tool results rather than inventing instructions. "
-    "Do not claim an action was performed unless a tool result establishes it."
+    "You are an autonomous L1 support agent. Follow the operational skill below."
 )
 
 DECISION_SYSTEM_PROMPT = (
-    "You choose the next outcome for an L1 support ticket after a KB search. "
-    "When an article directly addresses the reported problem and gives applicable "
-    "steps, select it and answer only from that article. "
-    "When no article does and the problem is infrastructural or otherwise suitable "
-    "for an L2 support specialist, choose escalate_l2 and provide a concise factual "
-    "summary. When no article does and the ticket describes a software defect, "
-    "choose create_github_issue and provide a useful issue title and technical "
-    "context. Otherwise return no_solution."
+    "Choose the post-KB outcome using the operational skills below."
 )
 
 POST_KB_DECISION_SCHEMA: dict[str, object] = {
@@ -118,14 +109,8 @@ def _decision_prompt(case: Case, articles: list[dict[str, object]]) -> str:
     return json.dumps(
         {
             "task": (
-                "Choose the next outcome after KB investigation. An article is an "
-                "adequate solution when it directly matches the reported symptoms "
-                "and provides applicable instructions; then choose resolve. Use only "
-                "information from retrieved articles in the answer. If there is no "
-                "adequate "
-                "article and the issue is infrastructural or appropriate for an L2 "
-                "support specialist, choose escalate_l2. If it is a software defect, "
-                "choose create_github_issue. Otherwise choose no_solution."
+                "Choose resolve, escalate_l2, create_github_issue, or no_solution "
+                "according to the supplied operational skills."
             ),
             "ticket": {
                 "title": case.ticket.title,
@@ -331,6 +316,9 @@ async def run_support_agent(
         raise ValueError("max_steps must be at least 1")
 
     context = AgentContext()
+    kb_skill = load_skill("kb-investigation")
+    l2_skill = load_skill("l2-escalation")
+    development_skill = load_skill("development-escalation")
     discovered_tools = await mcp_client.list_tools()
     discovered_tool_names = frozenset(tool.name for tool in discovered_tools)
     ticket_payload = {
@@ -340,7 +328,10 @@ async def run_support_agent(
         "priority": case.priority,
     }
     messages = [
-        LLMMessage(role=MessageRole.SYSTEM, content=SYSTEM_PROMPT),
+        LLMMessage(
+            role=MessageRole.SYSTEM,
+            content=f"{SYSTEM_PROMPT}\n\n{kb_skill.instructions}",
+        ),
         LLMMessage(
             role=MessageRole.USER,
             content=json.dumps(ticket_payload, ensure_ascii=False),
@@ -355,7 +346,12 @@ async def run_support_agent(
             decision_messages = [
                 LLMMessage(
                     role=MessageRole.SYSTEM,
-                    content=DECISION_SYSTEM_PROMPT,
+                    content=(
+                        f"{DECISION_SYSTEM_PROMPT}\n\n"
+                        f"{kb_skill.instructions}\n\n"
+                        f"{l2_skill.instructions}\n\n"
+                        f"{development_skill.instructions}"
+                    ),
                 ),
                 LLMMessage(
                     role=MessageRole.USER,

@@ -28,3 +28,4 @@ class LLMClient(Protocol):
             responce_schema: dict[str, object] | None = None
     ) -> LLMResponse:
         ...
+        

@@ -17,7 +17,11 @@ SYSTEM_PROMPT = (
 )
 
 DECISION_SYSTEM_PROMPT = (
-    "Choose the post-KB outcome using the operational skills below."
+    "Choose the post-KB outcome using the operational skills below. An empty or "
+    "inadequate KB result requires routing: use escalate_l2 for infrastructure, "
+    "network, or support operations; use create_github_issue for an actual "
+    "software defect. Use no_solution only when the ticket is genuinely ambiguous "
+    "or unsupported by those outcomes."
 )
 
 POST_KB_DECISION_SCHEMA: dict[str, object] = {
@@ -109,8 +113,10 @@ def _decision_prompt(case: Case, articles: list[dict[str, object]]) -> str:
     return json.dumps(
         {
             "task": (
-                "Choose resolve, escalate_l2, create_github_issue, or no_solution "
-                "according to the supplied operational skills."
+                "Resolve only from an adequate returned article. Otherwise route "
+                "infrastructure, network, or support operations to escalate_l2, "
+                "and actual software defects to create_github_issue. Choose "
+                "no_solution only for a genuinely ambiguous or unsupported case."
             ),
             "ticket": {
                 "title": case.ticket.title,

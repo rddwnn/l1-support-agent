@@ -65,9 +65,16 @@ async def connect_stdio_mcp(
 ) -> AsyncIterator[SessionMCPClient]:
     """Start an MCP stdio server and yield an initialized client adapter."""
 
+    pending_error: Exception | None = None
     async with (
         stdio_client(server) as (read_stream, write_stream),
         ClientSession(read_stream, write_stream) as session,
     ):
         await session.initialize()
-        yield SessionMCPClient(session)
+        try:
+            yield SessionMCPClient(session)
+        except Exception as error:  # noqa: BLE001 - preserve consumer exception
+            pending_error = error
+
+    if pending_error is not None:
+        raise pending_error

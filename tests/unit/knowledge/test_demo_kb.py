@@ -1,11 +1,24 @@
 from pathlib import Path
 
+import pytest
+
 from l1_support_agent.demo_kb import DEMO_ARTICLE, seed_demo_kb
 from l1_support_agent.knowledge.repository import KnowledgeRepository
 from l1_support_agent.persistence.database import connect_database
 
 
-def test_demo_kb_seed_is_searchable_and_idempotent(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "query",
+    [
+        "computer beeps startup boot",
+        "POST beep RAM",
+        "компьютер пищит не загружается",
+    ],
+)
+def test_demo_kb_seed_is_retrievable_for_realistic_queries(
+    tmp_path: Path,
+    query: str,
+) -> None:
     database_path = tmp_path / "demo.db"
 
     first = seed_demo_kb(database_path)
@@ -14,7 +27,7 @@ def test_demo_kb_seed_is_searchable_and_idempotent(tmp_path: Path) -> None:
     connection = connect_database(database_path)
     try:
         repository = KnowledgeRepository(connection)
-        matches = repository.search("компьютер пищит")
+        matches = repository.search(query)
         row_count = connection.execute(
             "SELECT COUNT(*) FROM knowledge_articles WHERE id = ?",
             (DEMO_ARTICLE.id,),

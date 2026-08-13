@@ -37,7 +37,7 @@ ollama pull "${LLM_MODEL:-qwen3.5:4b}"
 uv run python -m l1_support_agent.demo_kb
 ```
 
-The idempotent seed writes one synthetic POST/beep hardware article through `KnowledgeRepository`, including its FTS5 row.
+Run this seed before Scenario A. It idempotently writes one synthetic bilingual POST/beep hardware article through `KnowledgeRepository`, including its FTS5 row. Retrieval is lexical SQLite FTS5, not semantic or vector search, so the fixture contains natural English terms (`computer`, `beeps`, `startup`, `boot`, `POST`, `RAM`) and the matching Russian ticket vocabulary.
 
 ## Scenario matrix
 

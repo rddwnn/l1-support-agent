@@ -1,5 +1,8 @@
 import asyncio
 
+import pytest
+
+from l1_support_agent.agent.runtime import AgentRuntimeError
 from l1_support_agent.interfaces import RuntimeConfig, build_mcp_server_parameters
 from l1_support_agent.mcp.client import connect_stdio_mcp
 from l1_support_agent.persistence.database import connect_database
@@ -28,3 +31,19 @@ def test_real_stdio_server_discovers_company_capabilities(tmp_path) -> None:
         connection.execute("SELECT 1 FROM knowledge_articles LIMIT 1")
     finally:
         connection.close()
+
+
+def test_consumer_exception_survives_real_stdio_cleanup(tmp_path) -> None:
+    parameters = build_mcp_server_parameters(
+        RuntimeConfig(database_path=tmp_path / "consumer-error.db")
+    )
+    expected = AgentRuntimeError("Knowledge base contains no adequate solution")
+
+    async def fail_inside_context() -> None:
+        async with connect_stdio_mcp(parameters):
+            raise expected
+
+    with pytest.raises(AgentRuntimeError) as raised:
+        asyncio.run(fail_inside_context())
+
+    assert raised.value is expected

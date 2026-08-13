@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
+from typing import TypedDict
 
 from mcp.server import MCPServer
 
-from l1_support_agent.knowledge.models import KnowledgeArticle
 from l1_support_agent.knowledge.repository import KnowledgeRepository
 from l1_support_agent.persistence.database import connect_database
 
@@ -14,6 +14,18 @@ DATABASE_PATH = Path(
     )
 )
 
+
+class KnowledgeArticlePayload(TypedDict):
+    id: str
+    title: str
+    content: str
+    category: str | None
+
+
+class KnowledgeSearchPayload(TypedDict):
+    articles: list[KnowledgeArticlePayload]
+
+
 mcp = MCPServer("l1-support-agent")
 
 
@@ -21,17 +33,31 @@ mcp = MCPServer("l1-support-agent")
 def search_kb(
     query: str,
     limit: int = 5,
-) -> list[KnowledgeArticle]:
-    """Search the L1 support knowledge base for relevant instructions."""
+) -> KnowledgeSearchPayload:
+    """Search the L1 support knowledge base.
+
+    Use a short query containing the essential symptoms or error message.
+    """
+
     connection = connect_database(DATABASE_PATH)
 
     try:
-        repository = KnowledgeRepository(connection)
-
-        return repository.search(
+        articles = KnowledgeRepository(connection).search(
             query,
             limit=limit,
         )
+
+        return {
+            "articles": [
+                {
+                    "id": article.id,
+                    "title": article.title,
+                    "content": article.content,
+                    "category": article.category,
+                }
+                for article in articles
+            ]
+        }
     finally:
         connection.close()
 

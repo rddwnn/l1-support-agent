@@ -155,6 +155,9 @@ def test_runtime_filters_tools_executes_search_and_feeds_result_to_llm(
         ("search_kb", {"query": "computer three beeps startup"})
     ]
     assert [tool.name for tool in llm.calls[0][1] or []] == ["search_kb"]
+    first_system_prompt = llm.calls[0][0][0].content
+    assert "# KB Investigation" in first_system_prompt
+    assert "articles as candidates, not proof" in first_system_prompt
     assert llm.calls[1][1] == []
     assert llm.response_schemas[1] == RESOLUTION_DECISION_SCHEMA
 
@@ -162,7 +165,11 @@ def test_runtime_filters_tools_executes_search_and_feeds_result_to_llm(
     assert "retrieved_articles" in second_turn_messages[-1].content
     assert "POST beep codes" in second_turn_messages[-1].content
     assert "Computer beeps" in second_turn_messages[-1].content
-    assert "Use only information" in second_turn_messages[-1].content
+    post_kb_system_prompt = second_turn_messages[0].content
+    assert "# L2 Escalation" in post_kb_system_prompt
+    assert "# Development Escalation" in post_kb_system_prompt
+    assert "`escalate_l2`" in post_kb_system_prompt
+    assert "`create_github_issue`" in post_kb_system_prompt
 
 
 def test_runtime_rejects_forbidden_call_before_mcp_execution(

@@ -12,6 +12,7 @@ from l1_support_agent.domain import Ticket
 from l1_support_agent.llm.client import (
     LLMMessage,
     LLMResponse,
+    ToolDefinition,
 )
 
 
@@ -26,6 +27,7 @@ class FakeLLMClient:
         messages: list[LLMMessage],
         *,
         response_schema: dict[str, object] | None = None,
+        tools: list[ToolDefinition] | None = None,
     ) -> LLMResponse:
         self.messages = messages
         self.response_schema = response_schema

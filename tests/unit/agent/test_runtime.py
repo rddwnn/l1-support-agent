@@ -60,9 +60,25 @@ def processing_case() -> Case:
 
 
 class FakeMCPClient:
-    def __init__(self, tools: list[ToolDefinition] | None = None) -> None:
-        self.tools = tools or [SEARCH_KB]
+    def __init__(
+        self,
+        tools: list[ToolDefinition] | None = None,
+        *,
+        search_articles: list[dict[str, object]] | None = None,
+    ) -> None:
+        self.tools = tools if tools is not None else [SEARCH_KB]
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.search_articles = (
+            search_articles
+            if search_articles is not None
+            else [
+                {
+                    "id": "kb-post-beeps",
+                    "title": "POST beep codes",
+                    "content": "Reseat the RAM and retry startup.",
+                }
+            ]
+        )
 
     async def list_tools(self) -> list[ToolDefinition]:
         return self.tools
@@ -73,15 +89,13 @@ class FakeMCPClient:
         arguments: dict[str, object],
     ) -> object:
         self.calls.append((name, arguments))
-        return {
-            "articles": [
-                {
-                    "id": "kb-post-beeps",
-                    "title": "POST beep codes",
-                    "content": "Reseat the RAM and retry startup.",
-                }
-            ]
-        }
+        if name == "search_kb":
+            return {"articles": self.search_articles}
+        if name == "escalate_l2":
+            return {"message_id": 42}
+        if name == "create_github_issue":
+            return {"issue_url": "https://github.test/acme/app/issues/42"}
+        raise AssertionError(f"Unexpected tool call: {name}")
 
 
 class ScriptedLLMClient:
@@ -118,7 +132,8 @@ def kb_then_answer_llm() -> ScriptedLLMClient:
                 content=(
                     '{"decision":"resolve","article_id":"kb-post-beeps",'
                     '"answer":"Power off the computer, reseat the RAM, and retry '
-                    'startup.","summary":null}'
+                    'startup.","summary":null,"issue_title":null,'
+                    '"technical_context":null}'
                 )
             ),
         ]
@@ -254,7 +269,8 @@ def test_no_solution_keeps_case_processing(processing_case: Case) -> None:
             LLMResponse(
                 content=(
                     '{"decision":"no_solution","article_id":null,'
-                    '"answer":null,"summary":null}'
+                    '"answer":null,"summary":null,"issue_title":null,'
+                    '"technical_context":null}'
                 )
             ),
         ]
@@ -300,12 +316,17 @@ def test_l2_escalation_executes_tool_then_transitions_case(
                         "article_id": None,
                         "answer": None,
                         "summary": summary,
+                        "issue_title": None,
+                        "technical_context": None,
                     }
                 )
             ),
         ]
     )
-    mcp_client = FakeMCPClient([SEARCH_KB, ESCALATE_L2])
+    mcp_client = FakeMCPClient(
+        [SEARCH_KB, ESCALATE_L2],
+        search_articles=[],
+    )
 
     outcome = asyncio.run(process_case(processing_case, llm, mcp_client))
 
@@ -345,7 +366,8 @@ def test_l2_transition_is_not_applied_when_tool_fails(
             LLMResponse(
                 content=(
                     '{"decision":"escalate_l2","article_id":null,'
-                    '"answer":null,"summary":"Network unavailable"}'
+                    '"answer":null,"summary":"Network unavailable",'
+                    '"issue_title":null,"technical_context":null}'
                 )
             ),
         ]
@@ -356,7 +378,116 @@ def test_l2_transition_is_not_applied_when_tool_fails(
             process_case(
                 processing_case,
                 llm,
-                FailingMCPClient([SEARCH_KB, ESCALATE_L2]),
+                FailingMCPClient(
+                    [SEARCH_KB, ESCALATE_L2],
+                    search_articles=[],
+                ),
+            )
+        )
+
+    assert processing_case.state is CaseState.PROCESSING
+
+
+def test_software_bug_creates_issue_then_transitions_case(
+    processing_case: Case,
+) -> None:
+    processing_case.category = "software"
+    processing_case.ticket.metadata["logs"] = "HTTP 500: database timeout"
+    llm = ScriptedLLMClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=(
+                    ToolCall(name="search_kb", arguments={"query": "login HTTP 500"}),
+                ),
+            ),
+            LLMResponse(
+                content=json.dumps(
+                    {
+                        "decision": "create_github_issue",
+                        "article_id": None,
+                        "answer": None,
+                        "summary": None,
+                        "issue_title": "Login returns HTTP 500",
+                        "technical_context": (
+                            "Valid credentials trigger a database timeout."
+                        ),
+                    }
+                )
+            ),
+        ]
+    )
+    mcp_client = FakeMCPClient(
+        [SEARCH_KB, CREATE_ISSUE],
+        search_articles=[],
+    )
+
+    outcome = asyncio.run(process_case(processing_case, llm, mcp_client))
+
+    assert outcome.message == "https://github.test/acme/app/issues/42"
+    assert processing_case.state is CaseState.ESCALATED_DEVELOPMENT
+    assert mcp_client.calls == [
+        ("search_kb", {"query": "login HTTP 500"}),
+        (
+            "create_github_issue",
+            {
+                "title": "Login returns HTTP 500",
+                "technical_context": (
+                    "Valid credentials trigger a database timeout."
+                ),
+                "ticket_description": (
+                    "The computer emits three beeps during startup."
+                ),
+                "errors_logs": '{"logs": "HTTP 500: database timeout"}',
+                "ticket_reference": "https://support.test/tickets/1",
+            },
+        ),
+    ]
+
+
+def test_development_transition_is_not_applied_when_issue_creation_fails(
+    processing_case: Case,
+) -> None:
+    class FailingMCPClient(FakeMCPClient):
+        async def call_tool(
+            self,
+            name: str,
+            arguments: dict[str, object],
+        ) -> object:
+            if name == "create_github_issue":
+                raise RuntimeError("GitHub unavailable")
+            return await super().call_tool(name, arguments)
+
+    llm = ScriptedLLMClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=(ToolCall(name="search_kb", arguments={"query": "bug"}),),
+            ),
+            LLMResponse(
+                content=json.dumps(
+                    {
+                        "decision": "create_github_issue",
+                        "article_id": None,
+                        "answer": None,
+                        "summary": None,
+                        "issue_title": "Application crashes",
+                        "technical_context": "Crash occurs while saving.",
+                    }
+                )
+            ),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="GitHub unavailable"):
+        asyncio.run(
+            process_case(
+                processing_case,
+                llm,
+                FailingMCPClient(
+                    [SEARCH_KB, CREATE_ISSUE],
+                    search_articles=[],
+                ),
             )
         )
 

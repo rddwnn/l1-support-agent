@@ -24,7 +24,9 @@ DECISION_SYSTEM_PROMPT = (
     "steps, select it and answer only from that article. "
     "When no article does and the problem is infrastructural or otherwise suitable "
     "for an L2 support specialist, choose escalate_l2 and provide a concise factual "
-    "summary. Otherwise return no_solution."
+    "summary. When no article does and the ticket describes a software defect, "
+    "choose create_github_issue and provide a useful issue title and technical "
+    "context. Otherwise return no_solution."
 )
 
 POST_KB_DECISION_SCHEMA: dict[str, object] = {
@@ -32,13 +34,27 @@ POST_KB_DECISION_SCHEMA: dict[str, object] = {
     "properties": {
         "decision": {
             "type": "string",
-            "enum": ["resolve", "escalate_l2", "no_solution"],
+            "enum": [
+                "resolve",
+                "escalate_l2",
+                "create_github_issue",
+                "no_solution",
+            ],
         },
         "article_id": {"type": ["string", "null"]},
         "answer": {"type": ["string", "null"]},
         "summary": {"type": ["string", "null"]},
+        "issue_title": {"type": ["string", "null"]},
+        "technical_context": {"type": ["string", "null"]},
     },
-    "required": ["decision", "article_id", "answer", "summary"],
+    "required": [
+        "decision",
+        "article_id",
+        "answer",
+        "summary",
+        "issue_title",
+        "technical_context",
+    ],
     "additionalProperties": False,
 }
 
@@ -49,6 +65,7 @@ RESOLUTION_DECISION_SCHEMA = POST_KB_DECISION_SCHEMA
 class AgentOutcomeKind(StrEnum):
     RESOLVED = "resolved"
     ESCALATED_L2 = "escalated_l2"
+    ESCALATED_DEVELOPMENT = "escalated_development"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +80,8 @@ class PostKbDecision:
     article_id: str | None
     answer: str | None
     summary: str | None
+    issue_title: str | None
+    technical_context: str | None
 
 
 class AgentRuntimeError(RuntimeError):
@@ -105,20 +124,26 @@ def _decision_prompt(case: Case, articles: list[dict[str, object]]) -> str:
                 "information from retrieved articles in the answer. If there is no "
                 "adequate "
                 "article and the issue is infrastructural or appropriate for an L2 "
-                "support specialist, choose escalate_l2. Otherwise choose no_solution."
+                "support specialist, choose escalate_l2. If it is a software defect, "
+                "choose create_github_issue. Otherwise choose no_solution."
             ),
             "ticket": {
                 "title": case.ticket.title,
                 "description": case.ticket.description,
                 "category": case.category,
                 "priority": case.priority,
+                "metadata": case.ticket.metadata,
             },
             "retrieved_articles": articles,
             "required_output": {
-                "decision": "resolve, escalate_l2, or no_solution",
+                "decision": (
+                    "resolve, escalate_l2, create_github_issue, or no_solution"
+                ),
                 "article_id": "selected article id, or null",
                 "answer": "concise grounded user-facing answer, or null",
                 "summary": "concise factual L2 problem summary, or null",
+                "issue_title": "useful development issue title, or null",
+                "technical_context": "technical defect context, or null",
             },
         },
         ensure_ascii=False,
@@ -138,8 +163,15 @@ def _parse_decision(content: str) -> PostKbDecision:
     article_id = payload.get("article_id")
     answer = payload.get("answer")
     summary = payload.get("summary")
+    issue_title = payload.get("issue_title")
+    technical_context = payload.get("technical_context")
 
-    if decision not in {"resolve", "escalate_l2", "no_solution"}:
+    if decision not in {
+        "resolve",
+        "escalate_l2",
+        "create_github_issue",
+        "no_solution",
+    }:
         raise AgentRuntimeError("LLM returned an invalid post-KB decision")
     if article_id is not None and not isinstance(article_id, str):
         raise AgentRuntimeError("Resolution article_id must be a string or null")
@@ -147,12 +179,18 @@ def _parse_decision(content: str) -> PostKbDecision:
         raise AgentRuntimeError("Resolution answer must be a string or null")
     if summary is not None and not isinstance(summary, str):
         raise AgentRuntimeError("Escalation summary must be a string or null")
+    if issue_title is not None and not isinstance(issue_title, str):
+        raise AgentRuntimeError("Development issue title must be a string or null")
+    if technical_context is not None and not isinstance(technical_context, str):
+        raise AgentRuntimeError("Technical context must be a string or null")
 
     return PostKbDecision(
         decision=decision,
         article_id=article_id,
         answer=answer,
         summary=summary,
+        issue_title=issue_title,
+        technical_context=technical_context,
     )
 
 
@@ -183,6 +221,16 @@ def _ticket_reference(case: Case) -> str:
     return f"{case.ticket.source}:{case.ticket.source_id}"
 
 
+def _ticket_errors_logs(case: Case) -> str:
+    available: dict[str, object] = {}
+    for key in ("errors", "error", "logs", "stack_trace"):
+        if key in case.ticket.metadata:
+            available[key] = case.ticket.metadata[key]
+    if not available:
+        return "Not provided"
+    return json.dumps(available, ensure_ascii=False)
+
+
 async def _apply_post_kb_decision(
     decision: PostKbDecision,
     articles: list[dict[str, object]],
@@ -200,25 +248,65 @@ async def _apply_post_kb_decision(
     if decision.decision == "no_solution":
         raise AgentRuntimeError("Knowledge base contains no adequate solution")
 
-    summary = decision.summary
-    if summary is None or not summary.strip():
-        raise AgentRuntimeError("L2 escalation requires a non-empty summary")
+    if decision.decision == "escalate_l2":
+        summary = decision.summary
+        if summary is None or not summary.strip():
+            raise AgentRuntimeError("L2 escalation requires a non-empty summary")
 
-    tool_name = "escalate_l2"
+        tool_name = "escalate_l2"
+        ensure_tool_allowed(tool_name, case, context)
+        if tool_name not in discovered_tool_names:
+            raise AgentRuntimeError("Required MCP tool 'escalate_l2' is unavailable")
+
+        await mcp_client.call_tool(
+            tool_name,
+            {
+                "summary": summary,
+                "ticket_reference": _ticket_reference(case),
+            },
+        )
+        return AgentOutcome(
+            kind=AgentOutcomeKind.ESCALATED_L2,
+            message=summary,
+        )
+
+    issue_title = decision.issue_title
+    if issue_title is None or not issue_title.strip():
+        raise AgentRuntimeError(
+            "Development escalation requires a non-empty issue title"
+        )
+    technical_context = decision.technical_context
+    if technical_context is None or not technical_context.strip():
+        raise AgentRuntimeError(
+            "Development escalation requires non-empty technical context"
+        )
+
+    tool_name = "create_github_issue"
     ensure_tool_allowed(tool_name, case, context)
     if tool_name not in discovered_tool_names:
-        raise AgentRuntimeError("Required MCP tool 'escalate_l2' is unavailable")
+        raise AgentRuntimeError(
+            "Required MCP tool 'create_github_issue' is unavailable"
+        )
 
-    await mcp_client.call_tool(
+    result = await mcp_client.call_tool(
         tool_name,
         {
-            "summary": summary,
+            "title": issue_title,
+            "technical_context": technical_context,
+            "ticket_description": case.ticket.description,
+            "errors_logs": _ticket_errors_logs(case),
             "ticket_reference": _ticket_reference(case),
         },
     )
+    if not isinstance(result, dict):
+        raise AgentRuntimeError("create_github_issue returned invalid content")
+    issue_url = result.get("issue_url")
+    if not isinstance(issue_url, str) or not issue_url.strip():
+        raise AgentRuntimeError("create_github_issue did not return an issue URL")
+
     return AgentOutcome(
-        kind=AgentOutcomeKind.ESCALATED_L2,
-        message=summary,
+        kind=AgentOutcomeKind.ESCALATED_DEVELOPMENT,
+        message=issue_url,
     )
 
 

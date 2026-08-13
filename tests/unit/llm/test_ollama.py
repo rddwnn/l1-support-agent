@@ -7,6 +7,8 @@ import pytest
 from l1_support_agent.llm.client import (
     LLMMessage,
     MessageRole,
+    ToolCall,
+    ToolDefinition,
 )
 from l1_support_agent.llm.ollama import OllamaClient
 
@@ -236,4 +238,194 @@ def test_chat_serializes_multiple_messages() -> None:
             "content": "My application crashed.",
         },
     ]
-    
+
+
+def test_chat_serializes_tool_definitions() -> None:
+    received_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_payload.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": ""}},
+        )
+
+    tool = ToolDefinition(
+        name="search_kb",
+        description="Search support instructions.",
+        input_schema={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    )
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = OllamaClient(
+                http_client,
+                base_url="http://ollama.test",
+                model="test-model",
+            )
+            await client.chat([], tools=[tool])
+
+    asyncio.run(exercise())
+
+    assert received_payload["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_kb",
+                "description": "Search support instructions.",
+                "parameters": tool.input_schema,
+            },
+        }
+    ]
+
+
+def test_chat_parses_tool_calls_without_text_content() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "search_kb",
+                                "arguments": {"query": "computer beep"},
+                            },
+                        }
+                    ],
+                }
+            },
+        )
+
+    async def exercise():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = OllamaClient(
+                http_client,
+                base_url="http://ollama.test",
+                model="test-model",
+            )
+            return await client.chat([])
+
+    response = asyncio.run(exercise())
+
+    assert response.content == ""
+    assert response.tool_calls == (
+        ToolCall(
+            name="search_kb",
+            arguments={"query": "computer beep"},
+        ),
+    )
+
+
+def test_chat_serializes_tool_result_messages() -> None:
+    received_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_payload.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "Done"}},
+        )
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = OllamaClient(
+                http_client,
+                base_url="http://ollama.test",
+                model="test-model",
+            )
+            await client.chat(
+                [
+                    LLMMessage(
+                        role=MessageRole.ASSISTANT,
+                        content="",
+                        tool_calls=(
+                            ToolCall(
+                                name="search_kb",
+                                arguments={"query": "computer beep"},
+                            ),
+                        ),
+                    ),
+                    LLMMessage(
+                        role=MessageRole.TOOL,
+                        content='[{"title": "POST beep codes"}]',
+                        tool_name="search_kb",
+                    ),
+                ]
+            )
+
+    asyncio.run(exercise())
+
+    assert received_payload["messages"] == [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_kb",
+                        "arguments": {"query": "computer beep"},
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "content": '[{"title": "POST beep codes"}]',
+            "tool_name": "search_kb",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool_call", "error_message"),
+    [
+        (None, "tool call must be an object"),
+        ({}, "must contain a function object"),
+        ({"function": {"name": 1, "arguments": {}}}, "name must be a string"),
+        ({"function": {"name": "", "arguments": {}}}, "name must not be empty"),
+        ({"function": {"name": "search_kb", "arguments": []}}, "arguments must be an object"),
+    ],
+)
+def test_chat_rejects_malformed_tool_calls(
+    tool_call: object,
+    error_message: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [tool_call],
+                }
+            },
+        )
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = OllamaClient(
+                http_client,
+                base_url="http://ollama.test",
+                model="test-model",
+            )
+            await client.chat([])
+
+    with pytest.raises((TypeError, ValueError), match=error_message):
+        asyncio.run(exercise())

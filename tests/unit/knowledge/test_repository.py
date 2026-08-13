@@ -51,4 +51,24 @@ def test_search_returns_relevant_article(
 
     finally:
         connection.close()
-        
+
+
+def test_get_returns_article_by_id_or_none(tmp_path: Path) -> None:
+    database_path = tmp_path / "test.db"
+    init_database(database_path)
+    connection = connect_database(database_path)
+
+    try:
+        repository = KnowledgeRepository(connection)
+        article = KnowledgeArticle(
+            id="learned-case-42",
+            title="Verified VPN recovery",
+            content="Restart the gateway after applying the verified firmware.",
+            category="network",
+        )
+        repository.add(article)
+
+        assert repository.get(article.id) == article
+        assert repository.get("missing") is None
+    finally:
+        connection.close()

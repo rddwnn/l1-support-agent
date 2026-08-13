@@ -51,3 +51,26 @@ def test_skill_text_does_not_grant_tool_access() -> None:
     assert allowed_tool_names(case, AgentContext(kb_searched=False)) == frozenset(
         {"search_kb"}
     )
+
+
+def test_l2_skill_describes_structured_outcome_not_direct_tool_call() -> None:
+    instructions = load_skill("l2-escalation").instructions
+
+    assert "Select the structured `escalate_l2` outcome" in instructions
+    assert "non-empty `summary`" in instructions
+    assert "Python validate the decision" in instructions
+    assert "supply the support-ticket reference" in instructions
+    assert "Do not request or call the MCP tool directly" in instructions
+    assert "Request `escalate_l2` with" not in instructions
+
+
+def test_development_skill_describes_structured_outcome_not_direct_call() -> None:
+    instructions = load_skill("development-escalation").instructions
+
+    assert "Select the structured `create_github_issue` outcome" in instructions
+    assert "non-empty `issue_title`" in instructions
+    assert "non-empty `technical_context`" in instructions
+    assert "supply the original ticket description" in instructions
+    assert "available metadata errors/logs" in instructions
+    assert "Do not request or call the MCP tool directly" in instructions
+    assert "Request `create_github_issue` with" not in instructions

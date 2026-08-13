@@ -10,6 +10,7 @@ from l1_support_agent.mcp.client import MCPClient
 _OUTCOME_EVENTS = {
     AgentOutcomeKind.RESOLVED: Events.CASE_RESOLVED,
     AgentOutcomeKind.ESCALATED_L2: Events.L2_ESCALATED,
+    AgentOutcomeKind.ESCALATED_DEVELOPMENT: Events.DEVELOPMENT_ESCALATED,
 }
 
 

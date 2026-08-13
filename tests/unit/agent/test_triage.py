@@ -43,8 +43,8 @@ def make_ticket() -> Ticket:
         title="CRM returns 500",
         description="Saving a customer causes HTTP 500 for the whole sales team.",
         metadata={
-            "category": "Software issue",
-            "priority": "Critical",
+            "category": "Ошибки в работе ПО",
+            "priority": "Критический",
         },
     )
 
@@ -119,15 +119,42 @@ def test_triage_includes_ticket_and_source_signals() -> None:
     assert len(llm.messages) == 2
 
     user_message = llm.messages[1]
-
     payload = json.loads(user_message.content)
 
     assert payload == {
         "title": ticket.title,
         "description": ticket.description,
-        "source_category": "Software issue",
-        "source_priority": "Critical",
+        "source_category": "Ошибки в работе ПО",
+        "source_priority": "Критический",
     }
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        "database",
+        "security",
+        "",
+    ],
+)
+def test_triage_rejects_unknown_category(category: str) -> None:
+    llm = FakeLLMClient(
+        json.dumps(
+            {
+                "category": category,
+                "priority": "high",
+                "reasoning": "Reason",
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="Invalid triage category"):
+        asyncio.run(
+            triage_ticket(
+                make_ticket(),
+                llm,
+            )
+        )
 
 
 @pytest.mark.parametrize(

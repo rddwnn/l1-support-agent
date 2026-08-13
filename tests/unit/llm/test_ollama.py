@@ -183,3 +183,56 @@ def test_chat_propagates_http_status_error() -> None:
         asyncio.run(exercise())
 
     assert error.value.response.status_code == 503
+
+
+def test_chat_serializes_multiple_messages() -> None:
+    received_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_payload.update(json.loads(request.content))
+
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "role": "assistant",
+                    "content": "response",
+                }
+            },
+        )
+
+    async def exercise() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = OllamaClient(
+                http_client,
+                base_url="http://ollama.test",
+                model="test-model",
+            )
+
+            await client.chat(
+                [
+                    LLMMessage(
+                        role=MessageRole.SYSTEM,
+                        content="You are a support agent.",
+                    ),
+                    LLMMessage(
+                        role=MessageRole.USER,
+                        content="My application crashed.",
+                    ),
+                ]
+            )
+
+    asyncio.run(exercise())
+
+    assert received_payload["messages"] == [
+        {
+            "role": "system",
+            "content": "You are a support agent.",
+        },
+        {
+            "role": "user",
+            "content": "My application crashed.",
+        },
+    ]

@@ -2,61 +2,52 @@
 
 ## 1. Project overview
 
-A bounded single-agent support system for processing MockAPI tickets. The LLM interprets the ticket and selects an outcome; deterministic Python code controls tool visibility, validates every result, and applies lifecycle transitions.
+A bounded L1 support harness plus a reusable stdio MCP capability server.
 
-Core invariant: **the model proposes; the runtime authorizes and validates.**
+- The **company capability plane** exposes read-only tickets, KB search, Telegram escalation, and GitHub issue creation.
+- The **built-in harness** adds Case persistence, deterministic lifecycle and tool policy, a bounded Ollama loop, structured validation, skills, and verified self-learning.
+- An **external MCP-compatible harness** can reuse the capability plane, but must provide its own orchestration and authorization.
 
-Technical detail: [docs/architecture.md](docs/architecture.md). Practical runbook: [docs/demo.md](docs/demo.md).
+Core invariant for the built-in harness: **the model proposes; Python authorizes, validates, and transitions.**
 
-## 2. What the agent does
+See [architecture](docs/architecture.md), [external harness usage](docs/harnesses.md), and the [demo guide](docs/demo.md).
 
-| Stage | Implemented behavior | Owner |
+## 2. What the system does
+
+| Surface | Responsibility | Code |
 |---|---|---|
-| Ingest | Fetch and persist a MockAPI ticket | [`process_ticket_by_id`](src/l1_support_agent/application/process_ticket.py) |
-| Triage | Classify category and priority | [`triage_case`](src/l1_support_agent/application/triage_case.py) |
-| Investigate | Search SQLite FTS5 through MCP | [`run_support_agent`](src/l1_support_agent/agent/runtime.py) |
-| Decide | Resolve, escalate to L2, or create a GitHub issue | structured post-KB decision |
-| Enforce | Filter tools, validate outputs, transition state | [`tool_policy.py`](src/l1_support_agent/application/tool_policy.py), [`process_case.py`](src/l1_support_agent/application/process_case.py) |
-| Learn | Capture a caller-supplied verified resolution | [`learn_from_verified_resolution`](src/l1_support_agent/application/learn_from_resolution.py) |
+| MCP capability server | Portable company tools over stdio | [`mcp/server.py`](src/l1_support_agent/mcp/server.py) |
+| Built-in CLI/REST harness | Process and persist a ticket lifecycle | [`interfaces.py`](src/l1_support_agent/interfaces.py) |
+| Support runtime | Mandatory KB search, post-KB decision, validated outcome | [`agent/runtime.py`](src/l1_support_agent/agent/runtime.py) |
+| Explicit learning | Capture a verified post-escalation resolution | [`learn_from_resolution.py`](src/l1_support_agent/application/learn_from_resolution.py) |
 
 ## 3. Architecture at a glance
 
 ```mermaid
 flowchart LR
+    subgraph Harnesses
+        BuiltIn[Built-in bounded harness<br/>CLI / REST]
+        External[External MCP-compatible harness]
+    end
+
+    MCP[Company capability plane<br/>stdio MCP server]
+    Ollama[Ollama]
+    DB[(SQLite<br/>tickets, cases, KB, FTS5)]
     MockAPI[MockAPI tickets]
-    CLI[CLI]
-    REST[FastAPI REST]
-    Compose[Runtime composition]
-    UseCase[Application layer]
-    Triage[Triage]
-    Agent[Bounded support runtime]
-    Policy[Deterministic tool policy]
-    Ollama[Ollama LLM]
-    MCP[MCP stdio server]
-    KB[(SQLite KB + FTS5)]
     Telegram[Telegram]
     GitHub[GitHub Issues]
-    Store[(SQLite tickets + cases)]
 
-    CLI --> Compose
-    REST --> Compose
-    Compose --> MockAPI
-    Compose --> Ollama
-    Compose --> MCP
-    Compose --> UseCase
-    UseCase --> Triage
-    UseCase --> Agent
-    UseCase --> Store
-    Triage --> Ollama
-    Agent --> Ollama
-    Agent --> Policy
-    Agent --> MCP
-    MCP --> KB
-    MCP --> Telegram
-    MCP --> GitHub
+    BuiltIn -->|MCP client| MCP
+    External -->|MCP client| MCP
+    BuiltIn -->|triage and decisions| Ollama
+    BuiltIn -->|Case and Ticket persistence| DB
+    MCP -->|get/list tickets| MockAPI
+    MCP -->|search KB| DB
+    MCP -->|L2 escalation| Telegram
+    MCP -->|development escalation| GitHub
 ```
 
-The CLI and REST API share [`interfaces.py`](src/l1_support_agent/interfaces.py). MCP stays a transport boundary; it does not decide whether a tool is allowed.
+MCP advertises capabilities; it does not enforce [`tool_policy.py`](src/l1_support_agent/application/tool_policy.py). That Case-aware policy belongs to the built-in harness.
 
 ## 4. Ticket lifecycle
 
@@ -71,161 +62,144 @@ stateDiagram-v2
     PROCESSING --> ESCALATED_DEVELOPMENT: DEVELOPMENT_ESCALATED
 ```
 
-The legal transition table is in [`domain/transitions.py`](src/l1_support_agent/domain/transitions.py). Clarification states exist in the domain, but the current runtime does not implement the clarification flow.
+The transition table is [`domain/transitions.py`](src/l1_support_agent/domain/transitions.py). Clarification states exist, but the current runtime does not implement that business flow.
 
 ## 5. Agent decision flow
 
 ```mermaid
-flowchart TD
-    Start[PROCESSING Case] --> Visible[Expose only search_kb]
-    Visible --> Search[LLM requests search_kb]
-    Search --> Auth[Python authorizes and MCP executes]
-    Auth --> Candidates[Candidate articles returned]
-    Candidates --> Decision[LLM structured post-KB decision; tools disabled]
-    Decision -->|adequate article| ValidateKB[Validate article ID and answer]
-    Decision -->|infrastructure/support| ValidateL2[Validate summary]
-    Decision -->|software defect| ValidateDev[Validate title and context]
-    Decision -->|no_solution| Error[AgentRuntimeError; remain PROCESSING]
-    ValidateKB --> RESOLVED
-    ValidateL2 --> Telegram[Execute escalate_l2; validate message_id]
-    ValidateDev --> Issue[Execute create_github_issue; validate issue_url]
-    Telegram --> ESCALATED_L2
-    Issue --> ESCALATED_DEVELOPMENT
-```
-
-```mermaid
 sequenceDiagram
     actor Caller
-    participant App as process_ticket_by_id
+    participant Harness as Built-in harness
+    participant MCP as MCP capability server
     participant Source as MockAPI
     participant DB as SQLite repositories
-    participant Triage as triage_case
-    participant Agent as process_case / runtime
-    participant MCP as MCP server
+    participant LLM as Ollama
+    participant Ext as Telegram / GitHub
 
-    Caller->>App: ticket id
-    App->>Source: GET ticket
-    Source-->>App: Ticket
-    App->>DB: save Ticket; load/create Case
+    Caller->>Harness: process(ticket_id)
+    Harness->>MCP: get_ticket(ticket_id)
+    MCP->>Source: read ticket
+    Source-->>MCP: source payload
+    MCP-->>Harness: structured Ticket
+    Harness->>DB: save Ticket; load/create Case
     opt Case is NEW
-        App->>Triage: classify ticket
-        Triage-->>App: category + priority; PROCESSING
-        App->>DB: save Case
+        Harness->>LLM: triage skill + schema
+        LLM-->>Harness: category + priority
+        Harness->>DB: persist PROCESSING Case
     end
-    App->>Agent: process PROCESSING Case
-    Agent->>MCP: search_kb
-    MCP-->>Agent: candidate articles
-    Agent->>Agent: structured post-KB decision + validation
-    alt KB resolution
-        Agent-->>App: resolved answer
-    else L2 escalation
-        Agent->>MCP: escalate_l2
-        MCP-->>Agent: message_id
-    else development escalation
-        Agent->>MCP: create_github_issue
-        MCP-->>Agent: issue_url
+    Harness->>MCP: discover tools
+    Harness->>LLM: only policy-visible search_kb
+    LLM-->>Harness: search_kb(query)
+    Harness->>Harness: authorize call
+    Harness->>MCP: search_kb(query)
+    MCP-->>Harness: candidate articles
+    Harness->>LLM: structured post-KB decision; tools=[]
+    alt A — adequate KB article
+        LLM-->>Harness: resolve + article_id + answer
+        Harness->>Harness: validate returned ID and answer
+        Harness->>DB: CASE_RESOLVED
+    else B — infrastructure/support problem
+        LLM-->>Harness: escalate_l2 + summary
+        Harness->>Harness: validate and authorize
+        Harness->>MCP: escalate_l2(summary, reference)
+        MCP->>Ext: Telegram sendMessage
+        Ext-->>Harness: integer message_id
+        Harness->>DB: L2_ESCALATED
+    else C — software defect
+        LLM-->>Harness: create_github_issue + title + context
+        Harness->>Harness: validate and authorize
+        Harness->>MCP: create_github_issue(trusted ticket fields)
+        MCP->>Ext: create GitHub issue
+        Ext-->>Harness: non-empty issue_url
+        Harness->>DB: DEVELOPMENT_ESCALATED
     end
-    App->>DB: persist final Case
-    App-->>Caller: typed result
+    Harness-->>Caller: typed JSON result
 ```
 
-Terminal cases are idempotent: a repeated call returns the persisted state without another agent or external side effect.
+Terminal persisted cases short-circuit before triage, KB search, or external side effects.
 
 ## 6. Skills
 
-Operational instructions ship inside [`src/l1_support_agent/skills/`](src/l1_support_agent/skills/) and are loaded explicitly by [`agent/skills.py`](src/l1_support_agent/agent/skills.py).
+Packaged skills live in [`src/l1_support_agent/skills/`](src/l1_support_agent/skills/) and are loaded explicitly by [`agent/skills.py`](src/l1_support_agent/agent/skills.py).
 
-| Skill | Used by | Authority it has |
+| Skill | Prompt use | Authority |
 |---|---|---|
-| `triage` | initial classification prompt | instructions only |
-| `kb-investigation` | search and relevance prompts | instructions only |
-| `l2-escalation` | post-KB routing prompt | instructions only |
-| `development-escalation` | post-KB routing prompt | instructions only |
-| `knowledge-update` | verified-resolution learning | instructions only |
+| `triage` | category and priority | instructions only |
+| `kb-investigation` | search and semantic relevance | instructions only |
+| `l2-escalation` | structured L2 outcome | instructions only |
+| `development-escalation` | structured development outcome | instructions only |
+| `knowledge-update` | duplicate/create learning decision | instructions only |
 
-Skills cannot grant tools, call integrations, or mutate a Case.
+Skills can be reused by another harness as operational guidance. They never grant tool access or mutate lifecycle state.
 
 ## 7. MCP tools
 
-The stdio server in [`mcp/server.py`](src/l1_support_agent/mcp/server.py) exposes:
+Launch the standalone capability plane with:
 
-| Tool | Side effect/result | Runtime gate |
-|---|---|---|
-| `search_kb` | reads FTS5; returns `{"articles": [...]}` | PROCESSING, before KB search |
-| `escalate_l2` | sends Telegram message; returns integer `message_id` | PROCESSING, after KB search |
-| `create_github_issue` | creates issue; returns non-empty `issue_url` | PROCESSING, after KB search |
+```bash
+uv run l1-support-agent-mcp
+```
 
-The generic adapter [`mcp/client.py`](src/l1_support_agent/mcp/client.py) converts MCP metadata to provider-neutral tool definitions.
+| Tool | Capability | Mutates external state? | Built-in model sees it directly? |
+|---|---|---:|---:|
+| `list_tickets` | list source tickets | no | no |
+| `get_ticket` | fetch one source ticket | no | no |
+| `search_kb` | search SQLite FTS5 | no | yes, before KB search only |
+| `escalate_l2` | send Telegram escalation | yes | no; Python executes a validated outcome |
+| `create_github_issue` | create development issue | yes | no; Python executes a validated outcome |
+
+The server initializes the SQLite schema on startup and requires no Ollama configuration. See [docs/harnesses.md](docs/harnesses.md) for the portable MCP contract.
 
 ## 8. Self-learning
 
-Self-learning is explicit and never runs during normal ticket processing.
+Self-learning is intentionally outside the general MCP tool set.
 
-```mermaid
-sequenceDiagram
-    actor Human as Human/external workflow
-    participant Learn as learn_from_verified_resolution
-    participant Cases as CaseRepository
-    participant KB as KnowledgeRepository
-    participant LLM as Ollama
-    participant DB as SQLite + FTS5
+| Step | Deterministic safeguard |
+|---|---|
+| Load Case | only `ESCALATED_L2` or `ESCALATED_DEVELOPMENT` is eligible |
+| Accept resolution | caller must supply non-empty verified facts |
+| Check idempotency | stable ID `learned-case-{case_id}` |
+| Search duplicates | results are candidates, not automatic matches |
+| LLM decision | only `create` or `skip_existing`; tools disabled |
+| Write article | Python builds content from ticket + verified resolution |
 
-    Human->>Learn: case id + verified resolution
-    Learn->>Cases: load escalated Case
-    Learn->>KB: get deterministic learned article id
-    alt article already exists
-        Learn-->>Human: ALREADY_EXISTS
-    else first capture
-        Learn->>KB: search duplicate candidates
-        Learn->>LLM: structured create / skip_existing decision
-        alt adequate candidate selected
-            Learn-->>Human: COVERED_BY_EXISTING
-        else create
-            Learn->>Learn: build content from ticket + verified input
-            Learn->>DB: add article and FTS row
-            Learn-->>Human: CREATED
-        end
-    end
-```
-
-Only `ESCALATED_L2` and `ESCALATED_DEVELOPMENT` cases are eligible. The LLM may judge duplicate coverage and propose a title; it cannot generate the verified resolution.
+Full sequence: [architecture — self-learning](docs/architecture.md#self-learning-sequence).
 
 ## 9. Setup
 
-Requirements: Python 3.13+, [uv](https://docs.astral.sh/uv/), and a local Ollama service.
+Requirements: Python 3.13+, [uv](https://docs.astral.sh/uv/), and Ollama for the built-in harness.
 
 ```bash
 uv sync
 cp .env.example .env
+set -a; source .env; set +a
 ollama pull qwen3.5:4b
 uv run python -m l1_support_agent.demo_kb
 ```
 
-Export `.env` values in your shell before running the application. The demo seed is synthetic and idempotent.
+The application reads process environment variables; it does not parse `.env` itself.
 
 ## 10. Configuration
 
-| Variable | Default | Required when |
+| Variable | Default | Used by |
 |---|---|---|
-| `SUPPORT_DB_PATH` | `support.db` | always; default is usable |
-| `LLM_BASE_URL` | `http://localhost:11434` | always; default is usable |
-| `LLM_MODEL` | `qwen3.5:4b` | always; default is usable |
-| `TELEGRAM_BOT_TOKEN` | none | L2 outcome |
-| `TELEGRAM_CHAT_ID` | none | L2 outcome |
-| `GITHUB_TOKEN` | none | development outcome |
-| `GITHUB_REPOSITORY` | none | development outcome; `owner/repository` |
-| `GITHUB_API_URL` | `https://api.github.com` | development outcome |
-
-Secrets are read by integration code and are not logged.
+| `SUPPORT_DB_PATH` | `support.db` | built-in persistence and MCP KB |
+| `LLM_BASE_URL` | `http://localhost:11434` | built-in harness only |
+| `LLM_MODEL` | `qwen3.5:4b` | built-in harness only |
+| `TELEGRAM_BOT_TOKEN` | none | `escalate_l2` only |
+| `TELEGRAM_CHAT_ID` | none | `escalate_l2` only |
+| `GITHUB_TOKEN` | none | `create_github_issue` only |
+| `GITHUB_REPOSITORY` | none | `create_github_issue`; `owner/repository` |
+| `GITHUB_API_URL` | `https://api.github.com` | `create_github_issue` |
 
 ## 11. CLI usage
 
 ```bash
 uv run l1-support-agent process 1
-uv run l1-support-agent learn CASE_UUID --resolution "Verified steps supplied by L2"
+uv run l1-support-agent learn CASE_UUID --resolution "Verified resolution from L2"
 ```
 
-Both commands print compact JSON. `learn` writes no knowledge unless the Case is already escalated and the resolution is non-empty.
+The built-in `process` command obtains its source ticket through MCP. `learn` is a trusted application use case and does not use MCP.
 
 ## 12. REST API usage
 
@@ -235,10 +209,10 @@ curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/tickets/1/process
 curl -X POST http://127.0.0.1:8000/cases/CASE_UUID/learn \
   -H 'Content-Type: application/json' \
-  -d '{"verified_resolution":"Verified steps supplied by L2"}'
+  -d '{"verified_resolution":"Verified resolution from L2"}'
 ```
 
-The health route performs no external calls.
+`GET /health` performs no external calls.
 
 ## 13. Testing
 
@@ -248,28 +222,24 @@ uv run ruff check .
 uv build
 ```
 
-Unit tests use fake LLM/MCP clients and HTTPX mock transports. They do not contact MockAPI, Ollama, Telegram, or GitHub.
+Automated tests fake MockAPI, Ollama, Telegram, and GitHub. MCP stdio discovery is also verified without invoking side-effect tools.
 
 ## 14. Demo walkthrough
 
-```mermaid
-flowchart LR
-    Seed[Seed synthetic KB] --> A[Process matching hardware ticket]
-    A --> RA[RESOLVED + grounded answer]
-    B[Process infrastructure ticket] --> RB[Telegram message + ESCALATED_L2]
-    C[Process software defect] --> RC[GitHub issue + ESCALATED_DEVELOPMENT]
-    RB --> Learn[Supply verified external resolution]
-    RC --> Learn
-    Learn --> Article[Created or covered by existing]
-```
+| Scenario | Input | Expected MCP calls | Final state | Evidence |
+|---|---|---|---|---|
+| A: known solution | matching POST/beep ticket | `get_ticket`, `search_kb` | `RESOLVED` | grounded answer |
+| B: infrastructure | outage without KB solution | `get_ticket`, `search_kb`, `escalate_l2` | `ESCALATED_L2` | Telegram `message_id` |
+| C: software defect | defect without KB solution | `get_ticket`, `search_kb`, `create_github_issue` | `ESCALATED_DEVELOPMENT` | GitHub issue URL |
+| Learning | escalated Case + verified resolution | none | unchanged | created/existing KB article |
 
-Use the guarded steps in [docs/demo.md](docs/demo.md). Telegram and GitHub scenarios create real side effects when real credentials are configured.
+Guardrails and a no-side-effect MCP smoke are in [docs/demo.md](docs/demo.md).
 
 ## 15. Known limitations
 
-- One ticket is processed per CLI/API request; there is no polling or background worker.
-- Clarification transitions exist, but `request_clarification` is not implemented as an MCP tool or runtime flow.
-- Post-KB routing depends on structured LLM judgment; Python validates shape, selected IDs, tool availability, and tool results.
-- Self-learning requires an explicit verified resolution; there are no Telegram callbacks or GitHub webhooks.
-- The MockAPI endpoint is currently fixed in the integration client.
-- The demo has no authentication layer and is intended for local evaluation.
+- No polling, background worker, or authentication layer.
+- The clarification lifecycle exists, but `request_clarification` is not implemented.
+- FTS5 retrieval is lexical; the LLM performs relevance judgment over candidates.
+- The public MockAPI URL is fixed in its integration adapter.
+- External MCP harnesses do not automatically inherit Case persistence, built-in policy, validation, or self-learning safeguards.
+- Verified learning requires an explicit external/human resolution; there are no Telegram callbacks or GitHub webhooks.

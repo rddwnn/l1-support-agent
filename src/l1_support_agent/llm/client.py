@@ -25,7 +25,6 @@ class LLMClient(Protocol):
             self,
             messages: list[LLMMessage],
             *,
-            responce_schema: dict[str, object] | None = None
+            response_schema: dict[str, object] | None = None
     ) -> LLMResponse:
         ...
-        

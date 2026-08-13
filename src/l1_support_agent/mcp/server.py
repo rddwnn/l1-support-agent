@@ -6,8 +6,20 @@ import httpx
 from mcp.server import MCPServer
 
 from l1_support_agent.domain import Ticket
-from l1_support_agent.integrations.github import GitHubClient, GitHubConfig
-from l1_support_agent.integrations.telegram import TelegramClient, TelegramConfig
+from l1_support_agent.integrations.github import (
+    GitHubClient,
+    GitHubConfig,
+    MockGitHubClient,
+)
+from l1_support_agent.integrations.side_effects import (
+    SideEffectMode,
+    side_effect_mode_from_env,
+)
+from l1_support_agent.integrations.telegram import (
+    MockTelegramClient,
+    TelegramClient,
+    TelegramConfig,
+)
 from l1_support_agent.integrations.tickets.mockapi import MockApiTicketClient
 from l1_support_agent.knowledge.repository import KnowledgeRepository
 from l1_support_agent.persistence.database import connect_database, init_database
@@ -128,11 +140,17 @@ async def escalate_l2(
 ) -> TelegramEscalationPayload:
     """Escalate an infrastructure problem to the L2 support Telegram chat."""
 
-    async with httpx.AsyncClient() as http_client:
-        message_id = await TelegramClient(
-            http_client,
-            TelegramConfig.from_env(),
-        ).send_l2_escalation(summary, ticket_reference)
+    if side_effect_mode_from_env() is SideEffectMode.MOCK:
+        message_id = await MockTelegramClient().send_l2_escalation(
+            summary,
+            ticket_reference,
+        )
+    else:
+        async with httpx.AsyncClient() as http_client:
+            message_id = await TelegramClient(
+                http_client,
+                TelegramConfig.from_env(),
+            ).send_l2_escalation(summary, ticket_reference)
 
     return {"message_id": message_id}
 
@@ -147,17 +165,21 @@ async def create_github_issue(
 ) -> GitHubIssuePayload:
     """Create a development issue for a software defect found by L1 support."""
 
-    async with httpx.AsyncClient() as http_client:
-        issue_url = await GitHubClient(
-            http_client,
-            GitHubConfig.from_env(),
-        ).create_support_issue(
-            title=title,
-            technical_context=technical_context,
-            ticket_description=ticket_description,
-            errors_logs=errors_logs,
-            ticket_reference=ticket_reference,
-        )
+    arguments = {
+        "title": title,
+        "technical_context": technical_context,
+        "ticket_description": ticket_description,
+        "errors_logs": errors_logs,
+        "ticket_reference": ticket_reference,
+    }
+    if side_effect_mode_from_env() is SideEffectMode.MOCK:
+        issue_url = await MockGitHubClient().create_support_issue(**arguments)
+    else:
+        async with httpx.AsyncClient() as http_client:
+            issue_url = await GitHubClient(
+                http_client,
+                GitHubConfig.from_env(),
+            ).create_support_issue(**arguments)
 
     return {"issue_url": issue_url}
 

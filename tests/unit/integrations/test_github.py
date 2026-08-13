@@ -8,7 +8,25 @@ from l1_support_agent.integrations.github import (
     GitHubClient,
     GitHubConfig,
     GitHubError,
+    MockGitHubClient,
 )
+
+
+def test_mock_github_returns_stable_obviously_fake_url() -> None:
+    client = MockGitHubClient()
+    arguments = {
+        "title": "Login returns HTTP 500",
+        "technical_context": "Valid login triggers a server error.",
+        "ticket_description": "User cannot sign in.",
+        "errors_logs": "HTTP 500",
+        "ticket_reference": "mockapi:17",
+    }
+
+    first = asyncio.run(client.create_support_issue(**arguments))
+    second = asyncio.run(client.create_support_issue(**arguments))
+
+    assert first == second
+    assert first.startswith("https://mock.invalid/github/issues/")
 
 
 def test_create_support_issue_posts_complete_issue() -> None:

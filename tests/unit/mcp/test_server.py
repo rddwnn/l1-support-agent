@@ -2,7 +2,12 @@ import asyncio
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+
 from l1_support_agent.domain import Ticket
+from l1_support_agent.integrations.github import GitHubError
+from l1_support_agent.integrations.side_effects import SideEffectModeError
+from l1_support_agent.integrations.telegram import TelegramError
 from l1_support_agent.mcp import server
 from l1_support_agent.persistence.database import connect_database
 
@@ -105,3 +110,84 @@ def test_standalone_main_initializes_fresh_database(
         "knowledge_articles",
         "knowledge_articles_fts",
     } <= observed_tables
+
+
+def test_mock_side_effect_tools_need_no_credentials_or_http_client(
+    monkeypatch,
+) -> None:
+    class ForbiddenHttpClient:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("mock side effects must not create an HTTP client")
+
+    monkeypatch.setenv("SUPPORT_SIDE_EFFECT_MODE", "mock")
+    for name in (
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "GITHUB_TOKEN",
+        "GITHUB_REPOSITORY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(server.httpx, "AsyncClient", ForbiddenHttpClient)
+
+    telegram = asyncio.run(
+        server.escalate_l2("Office network unavailable", "mockapi:2")
+    )
+    github = asyncio.run(
+        server.create_github_issue(
+            "Login returns HTTP 500",
+            "Valid login triggers a server error.",
+            "User cannot sign in.",
+            "HTTP 500",
+            "mockapi:17",
+        )
+    )
+
+    assert isinstance(telegram["message_id"], int)
+    assert telegram["message_id"] > 0
+    assert github["issue_url"].startswith(
+        "https://mock.invalid/github/issues/"
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool", "error_type"),
+    [
+        (
+            lambda: server.escalate_l2("Network unavailable", "mockapi:2"),
+            TelegramError,
+        ),
+        (
+            lambda: server.create_github_issue(
+                "Bug",
+                "Context",
+                "Description",
+                "No logs",
+                "mockapi:17",
+            ),
+            GitHubError,
+        ),
+    ],
+)
+def test_real_mode_preserves_credential_requirements(
+    tool,
+    error_type: type[Exception],
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SUPPORT_SIDE_EFFECT_MODE", "real")
+    for name in (
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "GITHUB_TOKEN",
+        "GITHUB_REPOSITORY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(error_type, match="must be configured"):
+        asyncio.run(tool())
+
+
+def test_side_effect_tool_rejects_invalid_mode(monkeypatch) -> None:
+    monkeypatch.setenv("SUPPORT_SIDE_EFFECT_MODE", "unsafe")
+
+    with pytest.raises(SideEffectModeError, match="must be 'mock' or 'real'"):
+        asyncio.run(server.escalate_l2("Network unavailable", "mockapi:2"))

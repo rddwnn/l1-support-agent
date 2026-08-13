@@ -5,10 +5,25 @@ import httpx
 import pytest
 
 from l1_support_agent.integrations.telegram import (
+    MockTelegramClient,
     TelegramClient,
     TelegramConfig,
     TelegramError,
 )
+
+
+def test_mock_telegram_returns_stable_positive_message_id() -> None:
+    client = MockTelegramClient()
+
+    first = asyncio.run(
+        client.send_l2_escalation("Office network unavailable", "mockapi:2")
+    )
+    second = asyncio.run(
+        client.send_l2_escalation("Office network unavailable", "mockapi:2")
+    )
+
+    assert first == second
+    assert first > 0
 
 
 def test_send_l2_escalation_posts_summary_and_ticket_reference() -> None:

@@ -19,13 +19,14 @@ The consuming harness should launch the command as its MCP child process and dis
 | Variable | Required |
 |---|---|
 | `SUPPORT_DB_PATH` | optional; defaults to `support.db` |
-| `TELEGRAM_BOT_TOKEN` | only when `escalate_l2` is called |
-| `TELEGRAM_CHAT_ID` | only when `escalate_l2` is called |
-| `GITHUB_TOKEN` | only when `create_github_issue` is called |
-| `GITHUB_REPOSITORY` | only when `create_github_issue` is called |
+| `SUPPORT_SIDE_EFFECT_MODE` | optional; defaults to safe `mock`; accepts `mock` or `real` |
+| `TELEGRAM_BOT_TOKEN` | only for `escalate_l2` in real mode |
+| `TELEGRAM_CHAT_ID` | only for `escalate_l2` in real mode |
+| `GITHUB_TOKEN` | only for `create_github_issue` in real mode |
+| `GITHUB_REPOSITORY` | only for `create_github_issue` in real mode |
 | `GITHUB_API_URL` | optional; defaults to `https://api.github.com` |
 
-The MCP server does not read `LLM_BASE_URL` or `LLM_MODEL`.
+The MCP server does not read `LLM_BASE_URL` or `LLM_MODEL`. In mock mode, external harnesses can safely invoke both write capabilities without credentials: schemas and results are identical, but deterministic local adapters make no network requests.
 
 ## Tool catalog
 
@@ -34,8 +35,8 @@ The MCP server does not read `LLM_BASE_URL` or `LLM_MODEL`.
 | `list_tickets` | none | `{"tickets": [...]}` | read MockAPI |
 | `get_ticket` | `ticket_id` | `{"ticket": {...}}` | read MockAPI |
 | `search_kb` | `query`, optional `limit` | `{"articles": [...]}` | read SQLite FTS5 |
-| `escalate_l2` | `summary`, `ticket_reference` | `{"message_id": int}` | send Telegram message |
-| `create_github_issue` | title, context, description, logs, reference | `{"issue_url": str}` | create GitHub issue |
+| `escalate_l2` | `summary`, `ticket_reference` | `{"message_id": int}` | mock result or Telegram message |
+| `create_github_issue` | title, context, description, logs, reference | `{"issue_url": str}` | mock URL or GitHub issue |
 
 Ticket payloads contain `source`, `source_id`, `user`, `title`, `description`, and `metadata`.
 

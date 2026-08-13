@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from hashlib import sha256
 
 import httpx
 
@@ -62,3 +63,16 @@ class TelegramClient:
             raise TelegramError("Telegram response must contain an integer message_id")
 
         return message_id
+
+
+class MockTelegramClient:
+    """Deterministic network-free Telegram adapter for safe demos."""
+
+    async def send_l2_escalation(
+        self,
+        summary: str,
+        ticket_reference: str,
+    ) -> int:
+        payload = f"{summary}\0{ticket_reference}".encode()
+        stable_value = int.from_bytes(sha256(payload).digest()[:4], "big")
+        return stable_value % 2_147_483_646 + 1

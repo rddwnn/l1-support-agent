@@ -7,8 +7,7 @@
 | Python 3.13+ and `uv` | `uv --version` |
 | Ollama for the built-in harness | `ollama --version` |
 | Public MockAPI reachable | inspect the read-only dataset |
-| Telegram credentials | only for a real Scenario B side effect |
-| GitHub credentials | only for a real Scenario C side effect |
+| Telegram/GitHub credentials | not required for the default safe demo |
 
 ## Prepare a disposable runtime
 
@@ -20,9 +19,10 @@ set -a
 source .env
 set +a
 export SUPPORT_DB_PATH=/tmp/l1-support-agent-demo.db
+export SUPPORT_SIDE_EFFECT_MODE=mock
 ```
 
-The application reads exported environment variables; it does not parse `.env`.
+`mock` is the safe default. It exercises real LLM routing, MCP calls, built-in authorization, result validation, and Case transitions, but the final Telegram/GitHub adapters are deterministic and network-free. The application reads exported environment variables; it does not parse `.env`.
 
 Start Ollama in another terminal and ensure the configured model exists:
 
@@ -44,8 +44,8 @@ Run this seed before Scenario A. It idempotently writes one synthetic bilingual 
 | Scenario | Input | Business capability calls | Final state | Visible evidence |
 |---|---|---|---|---|
 | A — known KB issue | hardware POST/beep ticket | `get_ticket`, `search_kb` | `RESOLVED` | answer grounded in seeded article |
-| B — infrastructure | real outage with no adequate article | `get_ticket`, `search_kb`, `escalate_l2` | `ESCALATED_L2` | one Telegram message |
-| C — software defect | real defect with no adequate article | `get_ticket`, `search_kb`, `create_github_issue` | `ESCALATED_DEVELOPMENT` | one GitHub issue URL |
+| B — infrastructure | real outage with no adequate article | `get_ticket`, `search_kb`, `escalate_l2` | `ESCALATED_L2` | deterministic mock `message_id` |
+| C — software defect | real defect with no adequate article | `get_ticket`, `search_kb`, `create_github_issue` | `ESCALATED_DEVELOPMENT` | URL under `mock.invalid` |
 | Learning | escalated Case + verified resolution | no MCP calls | Case unchanged | learning status + article ID |
 
 ## Inspect source tickets
@@ -74,7 +74,7 @@ Run the same command again. The deterministic Case ID and state must match, and 
 
 ## Scenario B — L2 escalation
 
-This command can send a real Telegram message. Confirm the configured chat before running it.
+In default mock mode this is safe and requires no Telegram credentials.
 
 ```bash
 uv run l1-support-agent process INFRASTRUCTURE_TICKET_ID
@@ -82,13 +82,14 @@ uv run l1-support-agent process INFRASTRUCTURE_TICKET_ID
 
 Expected evidence:
 
-- the message contains a concise factual summary and ticket reference;
+- the LLM selects `escalate_l2` from the ticket and empty/inadequate KB result;
+- MCP returns a deterministic positive mock `message_id` without network access;
 - the Case reaches `ESCALATED_L2` only after an integer `message_id` is returned;
-- rerunning the terminal Case sends no second message.
+- rerunning the terminal Case performs no second escalation.
 
 ## Scenario C — development escalation
 
-This command can create a real GitHub issue. Confirm the configured repository first.
+In default mock mode this is safe and requires no GitHub credentials.
 
 ```bash
 uv run l1-support-agent process SOFTWARE_TICKET_ID
@@ -96,9 +97,24 @@ uv run l1-support-agent process SOFTWARE_TICKET_ID
 
 Expected evidence:
 
-- the issue contains factual context, source description, reference, and only available logs;
+- the LLM selects `create_github_issue` from an actual software defect;
+- MCP returns a deterministic URL under `https://mock.invalid/` without network access;
 - the Case reaches `ESCALATED_DEVELOPMENT` only after a non-empty issue URL is returned;
-- rerunning the terminal Case creates no second issue.
+- rerunning the terminal Case performs no second escalation.
+
+## Optional real integrations
+
+Only opt in when actual external writes are intended:
+
+```bash
+export SUPPORT_SIDE_EFFECT_MODE=real
+export TELEGRAM_BOT_TOKEN=...
+export TELEGRAM_CHAT_ID=...
+export GITHUB_TOKEN=...
+export GITHUB_REPOSITORY=owner/repository
+```
+
+Real mode preserves the production adapters and does not fall back to mock. Missing credentials fail clearly. Re-run only the scenario whose external destination you have verified.
 
 ## Explicit self-learning
 

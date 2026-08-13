@@ -236,3 +236,4 @@ def test_chat_serializes_multiple_messages() -> None:
             "content": "My application crashed.",
         },
     ]
+    

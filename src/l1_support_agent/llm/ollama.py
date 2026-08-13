@@ -1,6 +1,6 @@
 import httpx
 
-from .client import LLMResponse, LLMMessage
+from .client import LLMMessage, LLMResponse
 
 
 class OllamaClient:
@@ -12,7 +12,7 @@ class OllamaClient:
         model: str
     ) -> None:
         self._client = client
-        self._base_url = base_url
+        self._base_url = base_url.rstrip("/")
         self._model = model
 
     async def chat(
@@ -46,10 +46,11 @@ class OllamaClient:
 
         message = data.get("message")
         if not isinstance(message, dict):
-            raise ValueError("Ollama response must contain a message object")
+            raise TypeError("Ollama response must contain a message object")
 
         content = message.get("content")
         if not isinstance(content, str):
-            raise ValueError("Ollama message must contain string content")
+            raise TypeError("Ollama message must contain string content")
 
         return LLMResponse(content=content)
+    

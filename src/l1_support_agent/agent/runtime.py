@@ -258,13 +258,21 @@ async def _apply_post_kb_decision(
         if tool_name not in discovered_tool_names:
             raise AgentRuntimeError("Required MCP tool 'escalate_l2' is unavailable")
 
-        await mcp_client.call_tool(
+        result = await mcp_client.call_tool(
             tool_name,
             {
                 "summary": summary,
                 "ticket_reference": _ticket_reference(case),
             },
         )
+        if not isinstance(result, dict):
+            raise AgentRuntimeError("escalate_l2 returned invalid content")
+        message_id = result.get("message_id")
+        if not isinstance(message_id, int) or isinstance(message_id, bool):
+            raise AgentRuntimeError(
+                "escalate_l2 did not return an integer message_id"
+            )
+
         return AgentOutcome(
             kind=AgentOutcomeKind.ESCALATED_L2,
             message=summary,

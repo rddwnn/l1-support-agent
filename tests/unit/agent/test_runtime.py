@@ -388,6 +388,61 @@ def test_l2_transition_is_not_applied_when_tool_fails(
     assert processing_case.state is CaseState.PROCESSING
 
 
+@pytest.mark.parametrize(
+    ("tool_result", "error_message"),
+    [
+        ([], "invalid content"),
+        ({}, "integer message_id"),
+        ({"message_id": "42"}, "integer message_id"),
+        ({"message_id": True}, "integer message_id"),
+    ],
+)
+def test_l2_transition_is_not_applied_for_malformed_tool_result(
+    processing_case: Case,
+    tool_result: object,
+    error_message: str,
+) -> None:
+    class MalformedResultMCPClient(FakeMCPClient):
+        async def call_tool(
+            self,
+            name: str,
+            arguments: dict[str, object],
+        ) -> object:
+            if name == "escalate_l2":
+                return tool_result
+            return await super().call_tool(name, arguments)
+
+    llm = ScriptedLLMClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=(ToolCall(name="search_kb", arguments={"query": "network"}),),
+            ),
+            LLMResponse(
+                content=(
+                    '{"decision":"escalate_l2","article_id":null,'
+                    '"answer":null,"summary":"Network unavailable",'
+                    '"issue_title":null,"technical_context":null}'
+                )
+            ),
+        ]
+    )
+
+    with pytest.raises(AgentRuntimeError, match=error_message):
+        asyncio.run(
+            process_case(
+                processing_case,
+                llm,
+                MalformedResultMCPClient(
+                    [SEARCH_KB, ESCALATE_L2],
+                    search_articles=[],
+                ),
+            )
+        )
+
+    assert processing_case.state is CaseState.PROCESSING
+
+
 def test_software_bug_creates_issue_then_transitions_case(
     processing_case: Case,
 ) -> None:

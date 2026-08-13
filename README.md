@@ -103,14 +103,16 @@ sequenceDiagram
         Harness->>Harness: validate and authorize
         Harness->>MCP: escalate_l2(summary, reference)
         MCP->>Ext: Telegram sendMessage
-        Ext-->>Harness: integer message_id
+        Ext-->>MCP: Telegram response
+        MCP-->>Harness: integer message_id
         Harness->>DB: L2_ESCALATED
     else C — software defect
         LLM-->>Harness: create_github_issue + title + context
         Harness->>Harness: validate and authorize
         Harness->>MCP: create_github_issue(trusted ticket fields)
         MCP->>Ext: create GitHub issue
-        Ext-->>Harness: non-empty issue_url
+        Ext-->>MCP: GitHub response
+        MCP-->>Harness: non-empty issue_url
         Harness->>DB: DEVELOPMENT_ESCALATED
     end
     Harness-->>Caller: typed JSON result

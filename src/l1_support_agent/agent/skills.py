@@ -21,7 +21,7 @@ _SKILL_FILES = {
 }
 KNOWN_SKILL_NAMES = tuple(_SKILL_FILES)
 
-SKILLS_DIRECTORY = Path(__file__).resolve().parents[3] / "skills"
+SKILLS_DIRECTORY = Path(__file__).resolve().parents[1] / "skills"
 
 
 def load_skill(

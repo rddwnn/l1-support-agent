@@ -46,7 +46,7 @@ KB search is mandatory. Retrieval returns candidates, the LLM makes a structured
 | Outcome | When | Capability | Final state |
 |---|---|---|---|
 | KB resolution | A returned article directly solves the ticket | `search_kb` | `RESOLVED` |
-| L2 escalation | No adequate article; infrastructure/support issue | `escalate_l2` | `ESCALATED_L2` |
+| L2 escalation | No adequate article; unresolved non-software support case | `escalate_l2` | `ESCALATED_L2` |
 | Development escalation | No adequate article; software defect | `create_github_issue` | `ESCALATED_DEVELOPMENT` |
 
 ## Lifecycle

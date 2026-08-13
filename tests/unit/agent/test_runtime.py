@@ -4,7 +4,7 @@ import json
 import pytest
 
 from l1_support_agent.agent.runtime import (
-    RESOLUTION_DECISION_SCHEMA,
+    POST_KB_DECISION_SCHEMA,
     AgentRuntimeError,
     AgentStepLimitError,
     run_resolution_agent,
@@ -150,6 +150,19 @@ def kb_then_answer_llm() -> ScriptedLLMClient:
     )
 
 
+def test_post_kb_schema_has_exactly_three_outcomes() -> None:
+    properties = POST_KB_DECISION_SCHEMA["properties"]
+    assert isinstance(properties, dict)
+    decision = properties["decision"]
+    assert isinstance(decision, dict)
+
+    assert decision["enum"] == [
+        "resolve",
+        "escalate_l2",
+        "create_github_issue",
+    ]
+
+
 def test_runtime_filters_tools_executes_search_and_feeds_result_to_llm(
     processing_case: Case,
 ) -> None:
@@ -171,7 +184,7 @@ def test_runtime_filters_tools_executes_search_and_feeds_result_to_llm(
     assert "# KB Investigation" in first_system_prompt
     assert "articles as candidates, not proof" in first_system_prompt
     assert llm.calls[1][1] == []
-    assert llm.response_schemas[1] == RESOLUTION_DECISION_SCHEMA
+    assert llm.response_schemas[1] == POST_KB_DECISION_SCHEMA
 
     second_turn_messages = llm.calls[1][0]
     assert "retrieved_articles" in second_turn_messages[-1].content
@@ -276,7 +289,9 @@ def test_runtime_rejects_invalid_resolved_decision(
         asyncio.run(run_resolution_agent(processing_case, llm, FakeMCPClient()))
 
 
-def test_no_solution_keeps_case_processing(processing_case: Case) -> None:
+def test_runtime_rejects_invalid_post_kb_decision(
+    processing_case: Case,
+) -> None:
     llm = ScriptedLLMClient(
         [
             LLMResponse(
@@ -287,7 +302,7 @@ def test_no_solution_keeps_case_processing(processing_case: Case) -> None:
             ),
             LLMResponse(
                 content=(
-                    '{"decision":"no_solution","article_id":null,'
+                    '{"decision":"defer","article_id":null,'
                     '"answer":null,"summary":null,"issue_title":null,'
                     '"technical_context":null}'
                 )
@@ -295,7 +310,7 @@ def test_no_solution_keeps_case_processing(processing_case: Case) -> None:
         ]
     )
 
-    with pytest.raises(AgentRuntimeError, match="no adequate solution"):
+    with pytest.raises(AgentRuntimeError, match="invalid post-KB decision"):
         asyncio.run(resolve_case(processing_case, llm, FakeMCPClient()))
 
     assert processing_case.state is CaseState.PROCESSING
@@ -351,7 +366,9 @@ def test_l2_escalation_executes_tool_then_transitions_case(
 
     assert outcome.message == summary
     assert processing_case.state is CaseState.ESCALATED_L2
-    assert "use no_solution only" in llm.calls[1][0][0].content.lower()
+    assert "every other unresolved support request" in (
+        llm.calls[1][0][0].content.lower()
+    )
     assert mcp_client.calls == [
         ("search_kb", {"query": "network down"}),
         (
@@ -362,6 +379,68 @@ def test_l2_escalation_executes_tool_then_transitions_case(
             },
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("category", "title", "description"),
+    [
+        ("hardware", "Printer jams", "The office printer repeatedly jams."),
+        ("network", "No internet", "The workstation cannot reach any website."),
+        ("access", "Account locked", "The user cannot access their account."),
+        (
+            "consultation",
+            "Reporting help",
+            "The user needs specialist guidance for a report.",
+        ),
+    ],
+)
+def test_unresolved_non_software_support_routes_to_l2(
+    processing_case: Case,
+    category: str,
+    title: str,
+    description: str,
+) -> None:
+    processing_case.category = category
+    processing_case.ticket = Ticket(
+        source="mockapi",
+        source_id="1",
+        user="alice",
+        title=title,
+        description=description,
+    )
+    summary = f"Unresolved {category} support request: {description}"
+    llm = ScriptedLLMClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=(
+                    ToolCall(name="search_kb", arguments={"query": title}),
+                ),
+            ),
+            LLMResponse(
+                content=json.dumps(
+                    {
+                        "decision": "escalate_l2",
+                        "article_id": None,
+                        "answer": None,
+                        "summary": summary,
+                        "issue_title": None,
+                        "technical_context": None,
+                    }
+                )
+            ),
+        ]
+    )
+    mcp_client = FakeMCPClient(
+        [SEARCH_KB, ESCALATE_L2],
+        search_articles=[],
+    )
+
+    outcome = asyncio.run(process_case(processing_case, llm, mcp_client))
+
+    assert outcome.message == summary
+    assert processing_case.state is CaseState.ESCALATED_L2
+    assert mcp_client.calls[-1][0] == "escalate_l2"
 
 
 def test_l2_transition_is_not_applied_when_tool_fails(

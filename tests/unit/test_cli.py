@@ -108,14 +108,14 @@ def test_application_error_returns_nonzero_without_traceback(capsys: object) -> 
     assert "Traceback" not in output.err
 
 
-def test_process_no_solution_error_is_concise_without_exception_group(
+def test_process_application_error_is_concise_without_exception_group(
     capsys: object,
 ) -> None:
     async def process(
         ticket_id: str,
         config: RuntimeConfig,
     ) -> TicketProcessingResult:
-        raise AgentRuntimeError("Knowledge base contains no adequate solution")
+        raise AgentRuntimeError("Support agent could not complete ticket")
 
     exit_code = run_cli(
         ["process", "1"],
@@ -126,6 +126,6 @@ def test_process_no_solution_error_is_concise_without_exception_group(
     assert exit_code == 1
     output = capsys.readouterr()  # type: ignore[attr-defined]
     assert output.out == ""
-    assert output.err == "error: Knowledge base contains no adequate solution\n"
+    assert output.err == "error: Support agent could not complete ticket\n"
     assert "Traceback" not in output.err
     assert "ExceptionGroup" not in output.err

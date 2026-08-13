@@ -32,7 +32,7 @@ Use the ticket title, description, category, priority, and articles returned dur
 
 ## Expected output
 
-Request `search_kb`, then either select a returned article by ID with a concise grounded answer or report that no adequate solution exists.
+Request `search_kb`, then either select a returned article by ID with a concise grounded answer or continue to post-KB routing.
 
 ## Constraints / forbidden behavior
 

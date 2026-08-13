@@ -37,7 +37,7 @@ def test_consumer_exception_survives_real_stdio_cleanup(tmp_path) -> None:
     parameters = build_mcp_server_parameters(
         RuntimeConfig(database_path=tmp_path / "consumer-error.db")
     )
-    expected = AgentRuntimeError("Knowledge base contains no adequate solution")
+    expected = AgentRuntimeError("Consumer processing failed")
 
     async def fail_inside_context() -> None:
         async with connect_stdio_mcp(parameters):

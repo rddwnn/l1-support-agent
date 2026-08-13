@@ -75,10 +75,10 @@ uv run l1-support-agent-mcp
 | `list_tickets` | List source tickets | None |
 | `get_ticket` | Fetch one ticket | None |
 | `search_kb` | Search SQLite FTS5 | None |
-| `escalate_l2` | Deliver L2 summary | Telegram message |
-| `create_github_issue` | Deliver defect context | GitHub issue |
+| `escalate_l2` | Deliver L2 summary | Mock result or Telegram message |
+| `create_github_issue` | Deliver defect context | Mock URL or GitHub issue |
 
-The built-in model sees only tools allowed by current Case/runtime context. Ticket tools are used by composition; escalation tools execute only after a validated structured decision. External harnesses must enforce their own authorization.
+The safe default is `SUPPORT_SIDE_EFFECT_MODE=mock`: the real agent, MCP invocation, policy, validation, and transitions run normally, while deterministic network-free adapters replace only the final external writes. The built-in model does not know which adapter is selected. External harnesses must enforce their own authorization.
 
 ## Skills
 
@@ -96,6 +96,7 @@ Requirements: Python 3.13+, [uv](https://docs.astral.sh/uv/), and Ollama for the
 uv sync
 cp .env.example .env
 set -a; source .env; set +a
+export SUPPORT_SIDE_EFFECT_MODE=mock
 ollama pull qwen3.5:4b
 uv run python -m l1_support_agent.demo_kb
 ```
@@ -105,10 +106,11 @@ Run the demo KB seed before Scenario A. It adds a synthetic bilingual POST/beep 
 | Variable | Default / requirement |
 |---|---|
 | `SUPPORT_DB_PATH` | `support.db` |
+| `SUPPORT_SIDE_EFFECT_MODE` | `mock` (safe default) or `real` |
 | `LLM_BASE_URL` | `http://localhost:11434` |
 | `LLM_MODEL` | `qwen3.5:4b` |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Required only for L2 escalation |
-| `GITHUB_TOKEN`, `GITHUB_REPOSITORY` | Required only for development escalation |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Required only for real L2 escalation |
+| `GITHUB_TOKEN`, `GITHUB_REPOSITORY` | Required only for real development escalation |
 | `GITHUB_API_URL` | `https://api.github.com` |
 
 ## Run
@@ -140,6 +142,10 @@ curl -X POST http://127.0.0.1:8000/tickets/1/process
 | Verified learning | Case state unchanged | Created or existing KB article |
 
 Use [docs/demo.md](docs/demo.md) for ticket selection, side-effect guardrails, idempotency checks, and a no-side-effect MCP discovery smoke.
+
+### Optional real integrations
+
+Set `SUPPORT_SIDE_EFFECT_MODE=real` and configure the corresponding Telegram or GitHub credentials only when actual external writes are intended. Real mode never falls back to mock when credentials are missing.
 
 ## Testing
 

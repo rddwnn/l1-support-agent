@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from hashlib import sha256
 
 import httpx
 
@@ -78,3 +79,23 @@ class GitHubClient:
             raise GitHubError("GitHub issue response must contain an issue URL")
 
         return issue_url
+
+
+class MockGitHubClient:
+    """Deterministic network-free GitHub adapter for safe demos."""
+
+    async def create_support_issue(
+        self,
+        *,
+        title: str,
+        technical_context: str,
+        ticket_description: str,
+        errors_logs: str,
+        ticket_reference: str,
+    ) -> str:
+        payload = (
+            f"{title}\0{technical_context}\0{ticket_description}\0"
+            f"{errors_logs}\0{ticket_reference}"
+        ).encode()
+        stable_id = sha256(payload).hexdigest()[:16]
+        return f"https://mock.invalid/github/issues/{stable_id}"

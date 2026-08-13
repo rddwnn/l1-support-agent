@@ -252,10 +252,33 @@ def test_new_ticket_escalation_is_persisted(
     expected_tool: str,
 ) -> None:
     ticket_repository, case_repository = repositories(connection)
+    flow_ticket = Ticket(
+        source=ticket.source,
+        source_id=ticket.source_id,
+        user=ticket.user,
+        title=(
+            "Office network is unavailable"
+            if category == "network"
+            else "Login returns HTTP 500"
+        ),
+        description=(
+            "The gateway and internal services are unavailable for all users."
+            if category == "network"
+            else "Valid credentials return HTTP 500 for multiple users."
+        ),
+        metadata={
+            **ticket.metadata,
+            **(
+                {"logs": "HTTP 500: database timeout"}
+                if category == "software"
+                else {}
+            ),
+        },
+    )
     llm = ScriptedLLMClient(
         [
             triage_response(category),
-            search_response(ticket.title),
+            search_response(flow_ticket.title),
             decision_response(decision, **decision_values),
         ]
     )
@@ -264,7 +287,7 @@ def test_new_ticket_escalation_is_persisted(
     result = asyncio.run(
         process_ticket_by_id(
             "42",
-            FakeTicketClient(ticket),
+            FakeTicketClient(flow_ticket),
             ticket_repository,
             case_repository,
             llm,
@@ -277,6 +300,67 @@ def test_new_ticket_escalation_is_persisted(
     assert persisted is not None
     assert persisted.state is expected_state
     assert [name for name, _ in mcp.calls] == ["search_kb", expected_tool]
+
+
+def test_repeated_processing_does_not_repeat_agent_actions(
+    connection: sqlite3.Connection,
+    ticket: Ticket,
+) -> None:
+    ticket_repository, case_repository = repositories(connection)
+    llm = ScriptedLLMClient(
+        [
+            triage_response("hardware"),
+            search_response("three beeps"),
+            decision_response(
+                "resolve",
+                article_id="kb-beeps",
+                answer="Reseat the memory modules.",
+            ),
+        ]
+    )
+    mcp = FakeMCPClient(
+        [SEARCH_KB],
+        articles=[
+            {
+                "id": "kb-beeps",
+                "title": "Beep codes",
+                "content": "Reseat the memory modules.",
+            }
+        ],
+    )
+    ticket_client = FakeTicketClient(ticket)
+
+    first = asyncio.run(
+        process_ticket_by_id(
+            "42",
+            ticket_client,
+            ticket_repository,
+            case_repository,
+            llm,
+            mcp,
+        )
+    )
+    first_llm_call_count = len(llm.calls)
+    first_mcp_calls = list(mcp.calls)
+    second = asyncio.run(
+        process_ticket_by_id(
+            "42",
+            ticket_client,
+            ticket_repository,
+            case_repository,
+            llm,
+            mcp,
+        )
+    )
+
+    assert first.case_id == second.case_id
+    assert second.final_state is CaseState.RESOLVED
+    assert second.outcome_message is None
+    assert len(llm.calls) == first_llm_call_count
+    assert mcp.calls == first_mcp_calls
+    ticket_count = connection.execute("SELECT COUNT(*) FROM tickets").fetchone()[0]
+    case_count = connection.execute("SELECT COUNT(*) FROM cases").fetchone()[0]
+    assert (ticket_count, case_count) == (1, 1)
 
 
 @pytest.mark.parametrize(

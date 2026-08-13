@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 
 from l1_support_agent.application.tool_policy import (
     AgentContext,
@@ -18,37 +19,54 @@ SYSTEM_PROMPT = (
 )
 
 DECISION_SYSTEM_PROMPT = (
-    "You judge whether retrieved support articles solve a ticket. "
-    "This is a semantic relevance decision, not a guarantee of success. "
+    "You choose the next outcome for an L1 support ticket after a KB search. "
     "When an article directly addresses the reported problem and gives applicable "
-    "steps, you must select it and answer only from that article. "
-    "When no article does, return no_solution."
+    "steps, select it and answer only from that article. "
+    "When no article does and the problem is infrastructural or otherwise suitable "
+    "for an L2 support specialist, choose escalate_l2 and provide a concise factual "
+    "summary. Otherwise return no_solution."
 )
 
-RESOLUTION_DECISION_SCHEMA: dict[str, object] = {
+POST_KB_DECISION_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
         "decision": {
             "type": "string",
-            "enum": ["resolve", "no_solution"],
+            "enum": ["resolve", "escalate_l2", "no_solution"],
         },
         "article_id": {"type": ["string", "null"]},
         "answer": {"type": ["string", "null"]},
+        "summary": {"type": ["string", "null"]},
     },
-    "required": ["decision", "article_id", "answer"],
+    "required": ["decision", "article_id", "answer", "summary"],
     "additionalProperties": False,
 }
 
+# Backward-compatible name for Scenario-A callers.
+RESOLUTION_DECISION_SCHEMA = POST_KB_DECISION_SCHEMA
+
+
+class AgentOutcomeKind(StrEnum):
+    RESOLVED = "resolved"
+    ESCALATED_L2 = "escalated_l2"
+
 
 @dataclass(frozen=True, slots=True)
-class ResolutionDecision:
+class AgentOutcome:
+    kind: AgentOutcomeKind
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class PostKbDecision:
     decision: str
     article_id: str | None
     answer: str | None
+    summary: str | None
 
 
 class AgentRuntimeError(RuntimeError):
-    """The bounded agent run could not produce a valid final answer."""
+    """The bounded agent run could not produce a valid final outcome."""
 
 
 class AgentStepLimitError(AgentRuntimeError):
@@ -81,13 +99,13 @@ def _decision_prompt(case: Case, articles: list[dict[str, object]]) -> str:
     return json.dumps(
         {
             "task": (
-                "Decide whether one retrieved article adequately solves the ticket. "
-                "An article is adequate when its title or content directly matches "
-                "the reported symptoms and it provides relevant actionable "
-                "instructions. In that situation, decision must be resolve. Do not "
-                "require proof that the instructions will certainly fix the problem. "
-                "Use only information in the retrieved articles. If no article meets "
-                "these criteria, return no_solution."
+                "Choose the next outcome after KB investigation. An article is an "
+                "adequate solution when it directly matches the reported symptoms "
+                "and provides applicable instructions; then choose resolve. Use only "
+                "information from retrieved articles in the answer. If there is no "
+                "adequate "
+                "article and the issue is infrastructural or appropriate for an L2 "
+                "support specialist, choose escalate_l2. Otherwise choose no_solution."
             ),
             "ticket": {
                 "title": case.ticket.title,
@@ -97,49 +115,51 @@ def _decision_prompt(case: Case, articles: list[dict[str, object]]) -> str:
             },
             "retrieved_articles": articles,
             "required_output": {
-                "decision": "resolve or no_solution",
+                "decision": "resolve, escalate_l2, or no_solution",
                 "article_id": "selected article id, or null",
                 "answer": "concise grounded user-facing answer, or null",
+                "summary": "concise factual L2 problem summary, or null",
             },
         },
         ensure_ascii=False,
     )
 
 
-def _parse_decision(content: str) -> ResolutionDecision:
+def _parse_decision(content: str) -> PostKbDecision:
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as error:
-        raise AgentRuntimeError("LLM returned invalid resolution JSON") from error
+        raise AgentRuntimeError("LLM returned invalid post-KB JSON") from error
 
     if not isinstance(payload, dict):
-        raise AgentRuntimeError("LLM resolution decision must be an object")
+        raise AgentRuntimeError("LLM post-KB decision must be an object")
 
     decision = payload.get("decision")
     article_id = payload.get("article_id")
     answer = payload.get("answer")
+    summary = payload.get("summary")
 
-    if decision not in {"resolve", "no_solution"}:
-        raise AgentRuntimeError("LLM returned an invalid resolution decision")
+    if decision not in {"resolve", "escalate_l2", "no_solution"}:
+        raise AgentRuntimeError("LLM returned an invalid post-KB decision")
     if article_id is not None and not isinstance(article_id, str):
         raise AgentRuntimeError("Resolution article_id must be a string or null")
     if answer is not None and not isinstance(answer, str):
         raise AgentRuntimeError("Resolution answer must be a string or null")
+    if summary is not None and not isinstance(summary, str):
+        raise AgentRuntimeError("Escalation summary must be a string or null")
 
-    return ResolutionDecision(
+    return PostKbDecision(
         decision=decision,
         article_id=article_id,
         answer=answer,
+        summary=summary,
     )
 
 
 def _validated_answer(
-    decision: ResolutionDecision,
+    decision: PostKbDecision,
     articles: list[dict[str, object]],
 ) -> str:
-    if decision.decision == "no_solution":
-        raise AgentRuntimeError("Knowledge base contains no adequate solution")
-
     article_id = decision.article_id
     if article_id is None or not article_id.strip():
         raise AgentRuntimeError("Resolved decision requires a non-empty article_id")
@@ -155,20 +175,68 @@ def _validated_answer(
     return answer
 
 
-async def run_resolution_agent(
+def _ticket_reference(case: Case) -> str:
+    for key in ("url", "link", "ticket_url"):
+        value = case.ticket.metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return f"{case.ticket.source}:{case.ticket.source_id}"
+
+
+async def _apply_post_kb_decision(
+    decision: PostKbDecision,
+    articles: list[dict[str, object]],
+    case: Case,
+    context: AgentContext,
+    discovered_tool_names: frozenset[str],
+    mcp_client: MCPClient,
+) -> AgentOutcome:
+    if decision.decision == "resolve":
+        return AgentOutcome(
+            kind=AgentOutcomeKind.RESOLVED,
+            message=_validated_answer(decision, articles),
+        )
+
+    if decision.decision == "no_solution":
+        raise AgentRuntimeError("Knowledge base contains no adequate solution")
+
+    summary = decision.summary
+    if summary is None or not summary.strip():
+        raise AgentRuntimeError("L2 escalation requires a non-empty summary")
+
+    tool_name = "escalate_l2"
+    ensure_tool_allowed(tool_name, case, context)
+    if tool_name not in discovered_tool_names:
+        raise AgentRuntimeError("Required MCP tool 'escalate_l2' is unavailable")
+
+    await mcp_client.call_tool(
+        tool_name,
+        {
+            "summary": summary,
+            "ticket_reference": _ticket_reference(case),
+        },
+    )
+    return AgentOutcome(
+        kind=AgentOutcomeKind.ESCALATED_L2,
+        message=summary,
+    )
+
+
+async def run_support_agent(
     case: Case,
     llm: LLMClient,
     mcp_client: MCPClient,
     *,
     max_steps: int = 4,
-) -> str:
-    """Resolve a triaged case through the bounded known-KB scenario."""
+) -> AgentOutcome:
+    """Choose and execute one bounded support outcome after KB investigation."""
 
     if max_steps < 1:
         raise ValueError("max_steps must be at least 1")
 
     context = AgentContext()
     discovered_tools = await mcp_client.list_tools()
+    discovered_tool_names = frozenset(tool.name for tool in discovered_tools)
     ticket_payload = {
         "title": case.ticket.title,
         "description": case.ticket.description,
@@ -200,16 +268,20 @@ async def run_resolution_agent(
             ]
             response = await llm.chat(
                 decision_messages,
-                response_schema=RESOLUTION_DECISION_SCHEMA,
+                response_schema=POST_KB_DECISION_SCHEMA,
                 tools=[],
             )
             if response.tool_calls:
                 raise AgentRuntimeError(
-                    "LLM requested a tool while making the resolution decision"
+                    "LLM requested a tool while making the post-KB decision"
                 )
-            return _validated_answer(
+            return await _apply_post_kb_decision(
                 _parse_decision(response.content),
                 retrieved_articles,
+                case,
+                context,
+                discovered_tool_names,
+                mcp_client,
             )
 
         allowed_names = allowed_tool_names(case, context)
@@ -227,22 +299,26 @@ async def run_resolution_agent(
 
         tool_call = response.tool_calls[0]
         ensure_tool_allowed(tool_call.name, case, context)
-        messages.append(
-            LLMMessage(
-                role=MessageRole.ASSISTANT,
-                content=response.content,
-                tool_calls=response.tool_calls,
-            )
-        )
         result = await mcp_client.call_tool(tool_call.name, tool_call.arguments)
         retrieved_articles = _parse_articles(result)
         context = AgentContext(kb_searched=True)
-        messages.append(
-            LLMMessage(
-                role=MessageRole.TOOL,
-                content=json.dumps(result, ensure_ascii=False),
-                tool_name=tool_call.name,
-            )
-        )
 
     raise AgentStepLimitError(f"Agent exceeded the {max_steps}-step limit")
+
+
+async def run_resolution_agent(
+    case: Case,
+    llm: LLMClient,
+    mcp_client: MCPClient,
+    *,
+    max_steps: int = 4,
+) -> str:
+    """Run the support agent and return its successful outcome message."""
+
+    outcome = await run_support_agent(
+        case,
+        llm,
+        mcp_client,
+        max_steps=max_steps,
+    )
+    return outcome.message

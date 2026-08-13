@@ -1,5 +1,5 @@
-from l1_support_agent.agent.runtime import run_resolution_agent
-from l1_support_agent.domain import Case, Events, transition
+from l1_support_agent.application.process_case import process_case
+from l1_support_agent.domain import Case
 from l1_support_agent.llm.client import LLMClient
 from l1_support_agent.mcp.client import MCPClient
 
@@ -11,13 +11,12 @@ async def resolve_case(
     *,
     max_steps: int = 4,
 ) -> str:
-    """Run Scenario A and apply the legal resolved lifecycle transition."""
+    """Run the support flow and return its user-facing outcome message."""
 
-    answer = await run_resolution_agent(
+    outcome = await process_case(
         case,
         llm,
         mcp_client,
         max_steps=max_steps,
     )
-    case.state = transition(case.state, Events.CASE_RESOLVED)
-    return answer
+    return outcome.message

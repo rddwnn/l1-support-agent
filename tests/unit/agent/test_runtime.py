@@ -9,6 +9,7 @@ from l1_support_agent.agent.runtime import (
     AgentStepLimitError,
     run_resolution_agent,
 )
+from l1_support_agent.application.process_case import process_case
 from l1_support_agent.application.resolve_case import resolve_case
 from l1_support_agent.application.tool_policy import ToolNotAllowedError
 from l1_support_agent.domain import Case, CaseState, Ticket
@@ -33,6 +34,11 @@ CREATE_ISSUE = ToolDefinition(
     description="Create a development issue.",
     input_schema={"type": "object"},
 )
+ESCALATE_L2 = ToolDefinition(
+    name="escalate_l2",
+    description="Escalate an infrastructure issue to L2.",
+    input_schema={"type": "object"},
+)
 
 
 @pytest.fixture
@@ -44,6 +50,7 @@ def processing_case() -> Case:
             user="alice",
             title="Computer beeps and does not boot",
             description="The computer emits three beeps during startup.",
+            metadata={"url": "https://support.test/tickets/1"},
         )
     )
     case.state = CaseState.PROCESSING
@@ -111,7 +118,7 @@ def kb_then_answer_llm() -> ScriptedLLMClient:
                 content=(
                     '{"decision":"resolve","article_id":"kb-post-beeps",'
                     '"answer":"Power off the computer, reseat the RAM, and retry '
-                    'startup."}'
+                    'startup.","summary":null}'
                 )
             ),
         ]
@@ -247,7 +254,7 @@ def test_no_solution_keeps_case_processing(processing_case: Case) -> None:
             LLMResponse(
                 content=(
                     '{"decision":"no_solution","article_id":null,'
-                    '"answer":null}'
+                    '"answer":null,"summary":null}'
                 )
             ),
         ]
@@ -272,3 +279,85 @@ def test_successful_scenario_transitions_case_to_resolved(
 
     assert answer.startswith("Power off the computer")
     assert processing_case.state is CaseState.RESOLVED
+
+
+def test_l2_escalation_executes_tool_then_transitions_case(
+    processing_case: Case,
+) -> None:
+    summary = "Office network is unavailable for all users."
+    llm = ScriptedLLMClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=(
+                    ToolCall(name="search_kb", arguments={"query": "network down"}),
+                ),
+            ),
+            LLMResponse(
+                content=json.dumps(
+                    {
+                        "decision": "escalate_l2",
+                        "article_id": None,
+                        "answer": None,
+                        "summary": summary,
+                    }
+                )
+            ),
+        ]
+    )
+    mcp_client = FakeMCPClient([SEARCH_KB, ESCALATE_L2])
+
+    outcome = asyncio.run(process_case(processing_case, llm, mcp_client))
+
+    assert outcome.message == summary
+    assert processing_case.state is CaseState.ESCALATED_L2
+    assert mcp_client.calls == [
+        ("search_kb", {"query": "network down"}),
+        (
+            "escalate_l2",
+            {
+                "summary": summary,
+                "ticket_reference": "https://support.test/tickets/1",
+            },
+        ),
+    ]
+
+
+def test_l2_transition_is_not_applied_when_tool_fails(
+    processing_case: Case,
+) -> None:
+    class FailingMCPClient(FakeMCPClient):
+        async def call_tool(
+            self,
+            name: str,
+            arguments: dict[str, object],
+        ) -> object:
+            if name == "escalate_l2":
+                raise RuntimeError("Telegram unavailable")
+            return await super().call_tool(name, arguments)
+
+    llm = ScriptedLLMClient(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=(ToolCall(name="search_kb", arguments={"query": "network"}),),
+            ),
+            LLMResponse(
+                content=(
+                    '{"decision":"escalate_l2","article_id":null,'
+                    '"answer":null,"summary":"Network unavailable"}'
+                )
+            ),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="Telegram unavailable"):
+        asyncio.run(
+            process_case(
+                processing_case,
+                llm,
+                FailingMCPClient([SEARCH_KB, ESCALATE_L2]),
+            )
+        )
+
+    assert processing_case.state is CaseState.PROCESSING

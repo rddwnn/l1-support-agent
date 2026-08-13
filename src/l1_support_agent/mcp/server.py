@@ -2,8 +2,10 @@ import os
 from pathlib import Path
 from typing import TypedDict
 
+import httpx
 from mcp.server import MCPServer
 
+from l1_support_agent.integrations.telegram import TelegramClient, TelegramConfig
 from l1_support_agent.knowledge.repository import KnowledgeRepository
 from l1_support_agent.persistence.database import connect_database
 
@@ -24,6 +26,10 @@ class KnowledgeArticlePayload(TypedDict):
 
 class KnowledgeSearchPayload(TypedDict):
     articles: list[KnowledgeArticlePayload]
+
+
+class TelegramEscalationPayload(TypedDict):
+    message_id: int
 
 
 mcp = MCPServer("l1-support-agent")
@@ -60,6 +66,22 @@ def search_kb(
         }
     finally:
         connection.close()
+
+
+@mcp.tool()
+async def escalate_l2(
+    summary: str,
+    ticket_reference: str,
+) -> TelegramEscalationPayload:
+    """Escalate an infrastructure problem to the L2 support Telegram chat."""
+
+    async with httpx.AsyncClient() as http_client:
+        message_id = await TelegramClient(
+            http_client,
+            TelegramConfig.from_env(),
+        ).send_l2_escalation(summary, ticket_reference)
+
+    return {"message_id": message_id}
 
 
 if __name__ == "__main__":

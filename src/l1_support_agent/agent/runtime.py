@@ -17,11 +17,12 @@ SYSTEM_PROMPT = (
 )
 
 DECISION_SYSTEM_PROMPT = (
-    "Choose the post-KB outcome using the operational skills below. An empty or "
-    "inadequate KB result requires routing: use escalate_l2 for infrastructure, "
-    "network, or support operations; use create_github_issue for an actual "
-    "software defect. Use no_solution only when the ticket is genuinely ambiguous "
-    "or unsupported by those outcomes."
+    "Choose exactly one post-KB outcome using the operational skills below. "
+    "Resolve only from an adequate returned article. Otherwise use "
+    "create_github_issue for an actual software defect, including reported "
+    "software crashes, freezes, errors, incorrect results, failed operations, or "
+    "broken UI behavior. Use escalate_l2 for every other unresolved support "
+    "request."
 )
 
 POST_KB_DECISION_SCHEMA: dict[str, object] = {
@@ -33,7 +34,6 @@ POST_KB_DECISION_SCHEMA: dict[str, object] = {
                 "resolve",
                 "escalate_l2",
                 "create_github_issue",
-                "no_solution",
             ],
         },
         "article_id": {"type": ["string", "null"]},
@@ -113,10 +113,13 @@ def _decision_prompt(case: Case, articles: list[dict[str, object]]) -> str:
     return json.dumps(
         {
             "task": (
-                "Resolve only from an adequate returned article. Otherwise route "
-                "infrastructure, network, or support operations to escalate_l2, "
-                "and actual software defects to create_github_issue. Choose "
-                "no_solution only for a genuinely ambiguous or unsupported case."
+                "Choose exactly one outcome. Resolve only from an adequate returned "
+                "article. Otherwise route actual software defects to "
+                "create_github_issue. Reported software crashes, freezes, errors, "
+                "incorrect results, failed operations, and broken UI behavior are "
+                "software defects; they do not require an invented root cause. "
+                "Route every other unresolved support request to escalate_l2 "
+                "without inventing a diagnosis."
             ),
             "ticket": {
                 "title": case.ticket.title,
@@ -128,7 +131,7 @@ def _decision_prompt(case: Case, articles: list[dict[str, object]]) -> str:
             "retrieved_articles": articles,
             "required_output": {
                 "decision": (
-                    "resolve, escalate_l2, create_github_issue, or no_solution"
+                    "resolve, escalate_l2, or create_github_issue"
                 ),
                 "article_id": "selected article id, or null",
                 "answer": "concise grounded user-facing answer, or null",
@@ -161,7 +164,6 @@ def _parse_decision(content: str) -> PostKbDecision:
         "resolve",
         "escalate_l2",
         "create_github_issue",
-        "no_solution",
     }:
         raise AgentRuntimeError("LLM returned an invalid post-KB decision")
     if article_id is not None and not isinstance(article_id, str):
@@ -235,9 +237,6 @@ async def _apply_post_kb_decision(
             kind=AgentOutcomeKind.RESOLVED,
             message=_validated_answer(decision, articles),
         )
-
-    if decision.decision == "no_solution":
-        raise AgentRuntimeError("Knowledge base contains no adequate solution")
 
     if decision.decision == "escalate_l2":
         summary = decision.summary

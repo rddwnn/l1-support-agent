@@ -24,6 +24,7 @@ Use the ticket title and description, triage result, and KB outcome.
 ## Decision rules
 
 - Select the structured `create_github_issue` outcome.
+- Treat reported crashes, freezes, errors, incorrect results, failed operations, and broken UI behavior as actual software defects; no invented root cause is required.
 - Supply a useful `issue_title` and factual `technical_context`.
 - Let Python validate the decision and supply the original ticket description, available metadata errors/logs, and support-ticket reference.
 - Let Python execute the MCP tool and validate its returned issue URL.

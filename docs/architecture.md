@@ -173,7 +173,7 @@ sequenceDiagram
         Runtime->>Runtime: validate ID and grounded answer
         Runtime-->>App: RESOLVED outcome
         App->>DB: apply CASE_RESOLVED; persist
-    else B — infrastructure/support
+    else B — unresolved non-software support
         LLM-->>Runtime: escalate_l2 + factual summary
         Runtime->>Policy: ensure_tool_allowed(escalate_l2)
         Runtime->>MCP: escalate_l2(summary, ticket reference)

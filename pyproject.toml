@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 l1-support-agent = "l1_support_agent:main"
+l1-support-agent-mcp = "l1_support_agent.mcp.server:main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

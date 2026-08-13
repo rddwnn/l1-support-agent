@@ -5,10 +5,12 @@ from typing import TypedDict
 import httpx
 from mcp.server import MCPServer
 
+from l1_support_agent.domain import Ticket
 from l1_support_agent.integrations.github import GitHubClient, GitHubConfig
 from l1_support_agent.integrations.telegram import TelegramClient, TelegramConfig
+from l1_support_agent.integrations.tickets.mockapi import MockApiTicketClient
 from l1_support_agent.knowledge.repository import KnowledgeRepository
-from l1_support_agent.persistence.database import connect_database
+from l1_support_agent.persistence.database import connect_database, init_database
 
 DATABASE_PATH = Path(
     os.environ.get(
@@ -29,6 +31,23 @@ class KnowledgeSearchPayload(TypedDict):
     articles: list[KnowledgeArticlePayload]
 
 
+class TicketPayload(TypedDict):
+    source: str
+    source_id: str
+    user: str
+    title: str
+    description: str
+    metadata: dict[str, object]
+
+
+class GetTicketPayload(TypedDict):
+    ticket: TicketPayload
+
+
+class ListTicketsPayload(TypedDict):
+    tickets: list[TicketPayload]
+
+
 class TelegramEscalationPayload(TypedDict):
     message_id: int
 
@@ -38,6 +57,35 @@ class GitHubIssuePayload(TypedDict):
 
 
 mcp = MCPServer("l1-support-agent")
+
+
+def _serialize_ticket(ticket: Ticket) -> TicketPayload:
+    return {
+        "source": ticket.source,
+        "source_id": ticket.source_id,
+        "user": ticket.user,
+        "title": ticket.title,
+        "description": ticket.description,
+        "metadata": dict(ticket.metadata),
+    }
+
+
+@mcp.tool()
+async def get_ticket(ticket_id: str) -> GetTicketPayload:
+    """Fetch one support ticket from the configured read-only ticket source."""
+
+    async with httpx.AsyncClient() as http_client:
+        ticket = await MockApiTicketClient(http_client).get_ticket(ticket_id)
+    return {"ticket": _serialize_ticket(ticket)}
+
+
+@mcp.tool()
+async def list_tickets() -> ListTicketsPayload:
+    """List support tickets from the configured read-only ticket source."""
+
+    async with httpx.AsyncClient() as http_client:
+        tickets = await MockApiTicketClient(http_client).list_tickets()
+    return {"tickets": [_serialize_ticket(ticket) for ticket in tickets]}
 
 
 @mcp.tool()
@@ -114,5 +162,12 @@ async def create_github_issue(
     return {"issue_url": issue_url}
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Initialize local storage and run the reusable stdio capability server."""
+
+    init_database(DATABASE_PATH)
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

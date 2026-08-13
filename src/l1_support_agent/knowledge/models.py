@@ -7,4 +7,3 @@ class KnowledgeArticle:
     title: str
     content: str
     category: str | None = None
-    

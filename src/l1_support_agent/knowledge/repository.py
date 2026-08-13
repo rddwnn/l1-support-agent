@@ -1,6 +1,18 @@
+import re
 import sqlite3
 
 from .models import KnowledgeArticle
+
+
+def _build_fts_query(query: str) -> str:
+    terms = list(dict.fromkeys(re.findall(r"\w+", query.lower(), flags=re.UNICODE)))
+
+    if not terms:
+        raise ValueError("Knowledge query contains no searchable terms")
+
+    terms = terms[:8]
+
+    return " OR ".join(f'"{term}"' for term in terms)
 
 
 class KnowledgeRepository:
@@ -62,6 +74,8 @@ class KnowledgeRepository:
         *,
         limit: int = 5,
     ) -> list[KnowledgeArticle]:
+        fts_query = _build_fts_query(query)
+
         rows = self._connection.execute(
             """
             SELECT
@@ -77,7 +91,7 @@ class KnowledgeRepository:
             LIMIT ?
             """,
             (
-                query,
+                fts_query,
                 limit,
             ),
         ).fetchall()

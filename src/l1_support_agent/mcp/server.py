@@ -5,6 +5,7 @@ from typing import TypedDict
 import httpx
 from mcp.server import MCPServer
 
+from l1_support_agent.integrations.github import GitHubClient, GitHubConfig
 from l1_support_agent.integrations.telegram import TelegramClient, TelegramConfig
 from l1_support_agent.knowledge.repository import KnowledgeRepository
 from l1_support_agent.persistence.database import connect_database
@@ -30,6 +31,10 @@ class KnowledgeSearchPayload(TypedDict):
 
 class TelegramEscalationPayload(TypedDict):
     message_id: int
+
+
+class GitHubIssuePayload(TypedDict):
+    issue_url: str
 
 
 mcp = MCPServer("l1-support-agent")
@@ -82,6 +87,31 @@ async def escalate_l2(
         ).send_l2_escalation(summary, ticket_reference)
 
     return {"message_id": message_id}
+
+
+@mcp.tool()
+async def create_github_issue(
+    title: str,
+    technical_context: str,
+    ticket_description: str,
+    errors_logs: str,
+    ticket_reference: str,
+) -> GitHubIssuePayload:
+    """Create a development issue for a software defect found by L1 support."""
+
+    async with httpx.AsyncClient() as http_client:
+        issue_url = await GitHubClient(
+            http_client,
+            GitHubConfig.from_env(),
+        ).create_support_issue(
+            title=title,
+            technical_context=technical_context,
+            ticket_description=ticket_description,
+            errors_logs=errors_logs,
+            ticket_reference=ticket_reference,
+        )
+
+    return {"issue_url": issue_url}
 
 
 if __name__ == "__main__":

@@ -25,3 +25,17 @@ CREATE TABLE IF NOT EXISTS cases (
     FOREIGN KEY (ticket_source, ticket_source_id)
         REFERENCES tickets(source, source_id)
 );
+
+CREATE TABLE IF NOT EXISTS knowledge_articles (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    category TEXT
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_articles_fts
+USING fts5(
+    article_id UNINDEXED,
+    title,
+    content
+);

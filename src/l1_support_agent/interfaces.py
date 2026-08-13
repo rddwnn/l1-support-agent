@@ -16,7 +16,7 @@ from l1_support_agent.application.process_ticket import (
     TicketProcessingResult,
     process_ticket_by_id,
 )
-from l1_support_agent.integrations.tickets.mockapi import MockApiTicketClient
+from l1_support_agent.integrations.tickets.mcp import MCPTicketClient
 from l1_support_agent.knowledge.repository import KnowledgeRepository
 from l1_support_agent.llm.ollama import OllamaClient
 from l1_support_agent.mcp.client import connect_stdio_mcp
@@ -77,7 +77,6 @@ async def run_ticket_processing(
     connection = connect_database(config.database_path)
     try:
         async with httpx.AsyncClient(timeout=120.0) as http_client:
-            ticket_client = MockApiTicketClient(http_client)
             llm = OllamaClient(
                 http_client,
                 base_url=config.llm_base_url,
@@ -85,6 +84,7 @@ async def run_ticket_processing(
             )
             server = build_mcp_server_parameters(config)
             async with connect_stdio_mcp(server) as mcp_client:
+                ticket_client = MCPTicketClient(mcp_client)
                 return await process_ticket_by_id(
                     ticket_id,
                     ticket_client,

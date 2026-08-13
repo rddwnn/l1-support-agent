@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 
+from l1_support_agent.agent.skills import load_skill
 from l1_support_agent.domain import Ticket
 from l1_support_agent.llm.client import (
     LLMClient,
@@ -59,6 +60,7 @@ async def triage_ticket(
     ticket: Ticket,
     llm: LLMClient,
 ) -> TriageResult:
+    triage_skill = load_skill("triage")
     ticket_data = json.dumps(
         {
             "title": ticket.title,
@@ -74,15 +76,8 @@ async def triage_ticket(
             LLMMessage(
                 role=MessageRole.SYSTEM,
                 content=(
-                    "You are an L1 technical support triage agent. "
-                    "Analyze the reported problem and classify it. "
-                    "Base your decision primarily on the ticket title and description. "
-                    "The source system may provide a category and priority; use them as "
-                    "secondary context, but do not follow them automatically. "
-                    "Category must be one of: access, consultation, hardware, software, network. "
-                    "Priority must be one of: low, medium, high, critical. "
-                    "Choose the category and priority that best reflect the actual problem "
-                    "and its impact."
+                    "You are an L1 technical support triage agent.\n\n"
+                    f"{triage_skill.instructions}"
                 ),
             ),
             LLMMessage(

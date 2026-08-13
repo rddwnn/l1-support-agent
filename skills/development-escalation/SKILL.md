@@ -15,7 +15,7 @@ Use only after KB investigation found no adequate solution and the ticket descri
 
 ## Required input/context
 
-Use the ticket title and description, factual technical context, metadata errors/logs when present, and support-ticket reference.
+Use the ticket title and description, triage result, and KB outcome.
 
 ## Allowed tools
 
@@ -23,16 +23,16 @@ Use the ticket title and description, factual technical context, metadata errors
 
 ## Decision rules
 
-- Produce a useful issue title and factual technical context.
-- Preserve the original support-ticket description.
-- Include only errors or logs actually present in ticket metadata; otherwise state that they were not provided.
-- Include the support-ticket reference.
-- Consider creation successful only after MCP returns a valid non-empty issue URL.
+- Select the structured `create_github_issue` outcome.
+- Supply a useful `issue_title` and factual `technical_context`.
+- Let Python validate the decision and supply the original ticket description, available metadata errors/logs, and support-ticket reference.
+- Let Python execute the MCP tool and validate its returned issue URL.
+- Do not assume or report that issue creation succeeded.
 
 ## Expected output
 
-Request `create_github_issue` with `title`, `technical_context`, `ticket_description`, `errors_logs`, and `ticket_reference`.
+Return structured post-KB decision fields with `decision` set to `create_github_issue`, a non-empty `issue_title`, and non-empty `technical_context`.
 
 ## Constraints / forbidden behavior
 
-Never invent logs, stack traces, reproduction steps, diagnosis, or diagnostic evidence. Do not claim success before receiving a valid issue URL. Do not mutate lifecycle state; the deterministic application layer owns transitions.
+Do not request or call the MCP tool directly. Never invent logs, stack traces, reproduction steps, diagnosis, or diagnostic evidence. Do not fabricate fields or claim issue creation succeeded. Do not mutate lifecycle state; the deterministic Python application layer owns tool execution and transitions.

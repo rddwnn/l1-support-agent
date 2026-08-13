@@ -97,6 +97,28 @@ def test_triage_passes_schema_to_llm() -> None:
     assert llm.response_schema == TRIAGE_SCHEMA
 
 
+def test_triage_prompt_contains_operational_skill() -> None:
+    llm = FakeLLMClient(
+        json.dumps(
+            {
+                "category": "software",
+                "priority": "high",
+                "reasoning": "Reason",
+            }
+        )
+    )
+
+    asyncio.run(triage_ticket(make_ticket(), llm))
+
+    assert llm.messages is not None
+    system_prompt = llm.messages[0].content
+    assert "# Triage" in system_prompt
+    assert "only on ticket data" in system_prompt
+    assert "Do not invent" in system_prompt
+    assert "`access`" in system_prompt
+    assert "`critical`" in system_prompt
+
+
 def test_triage_includes_ticket_and_source_signals() -> None:
     ticket = make_ticket()
 
